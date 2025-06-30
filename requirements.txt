@@ -1,1 +1,4 @@
-
+python-dotenv==1.1.0
+Telethon==1.40.0
+pandas==2.1.4
+openai==1.93.0
