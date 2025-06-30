@@ -5,3 +5,5 @@ logs/
 events_db/
 
 *.pyc
+
+config
