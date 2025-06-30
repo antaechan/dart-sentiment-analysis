@@ -3,3 +3,5 @@
 logs/
 
 events_db/
+
+*.pyc
