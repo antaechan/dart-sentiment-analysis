@@ -24,6 +24,7 @@ CHANNEL    = os.getenv("CHANNEL_USERNAME")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 SESSION = os.getenv("TG_SESSION")
 
+# START = date(2022, 5, 1)
 START = date(2023, 11, 1)
 END   = date(2023, 12, 31)
 
@@ -92,7 +93,7 @@ def disclosure_ingest_dag():
                                         offset_date=offset_d2_utc,
                                         limit=2500,
                                         wait_time=0,
-                                        reverse=True):  # 오래된→최근
+                                        reverse=False):
                 try:
                     # ↙️ ① KST 로 변환 후 date 비교
                     disclosed_at_KST = msg.date.astimezone(KST)
