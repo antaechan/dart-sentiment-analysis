@@ -185,6 +185,10 @@ services:
       # Required to handle warm shutdown of the celery workers properly
       # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
       DUMB_INIT_SETSID: "0"
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: events
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -342,10 +346,28 @@ services:
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: disclosures
+      POSTGRES_DB: events
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U your_user"]
+      interval: 10s        # 체크 주기
+      timeout: 5s          # 응답 시간 제한
+      retries: 5           # 실패 시 재시도 횟수
+      start_period: 30s    # 초기 대기 시간
     volumes:
-      - ./events_db:/var/lib/postgresql/data
+      # - /Volumes/T7/events_db:/var/lib/postgresql/data   # ← 외장 SSD 경로
+      - ./events_db:/var/lib/postgresql/data   # ← 외장 SSD 경로
     ports: ["5433:5432"]   # 개발용 외부 노출
+
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: 0627antaechan@gmail.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres_events:
+        condition: service_healthy
 
 volumes:
   postgres-db-volume:
