@@ -6,8 +6,8 @@ from datetime import datetime
 import polars as pl
 from airflow.decorators import dag, task
 
-RAW_DIR = Path("/opt/airflow/data")
-OUT_DIR = Path("/opt/airflow/data/ohlcv")
+RAW_DIR = Path("/opt/airflow/data/KOSPI/unzip")
+OUT_DIR = Path("/opt/airflow/data/KOSPI/ohlcv")
 TZ      = "Asia/Seoul"
 
 COLS  = [
@@ -34,7 +34,7 @@ def tick_to_ohlcv_dag():
 
     @task
     def list_files() -> list[str]:
-        """Return all raw tick files that *don’t* have a matching parquet yet."""
+        """Return all raw tick files that *don't* have a matching parquet yet."""
         return [
             str(p)
             for p in RAW_DIR.iterdir()
@@ -43,52 +43,100 @@ def tick_to_ohlcv_dag():
         ]
 
     @task
-    def convert(file_path: str) -> str:
+    def convert(file_path: str) -> list[str]:
         """Convert one .dat.gz file to 1-minute OHLCV parquet."""
         p   = Path(file_path)
-        out = OUT_DIR / f"{p.stem}_1m.parquet"
+        out_paths: list[str] = []
 
-        (pl.scan_csv(
-            p,
-            separator="|",
-            new_columns=COLS,
-            ignore_errors=True,
-            infer_schema_length=500,
-            has_header=False,
-            low_memory=True,
-        )
-        .select(KEEP)
-        .with_columns(
-            pl.datetime(
-                pl.col("체결일자").str.slice(0,4).cast(pl.Int32),
-                pl.col("체결일자").str.slice(4,2).cast(pl.Int8),
-                pl.col("체결일자").str.slice(6,2).cast(pl.Int8),
-                pl.col("체결시각").str.zfill(9).str.slice(0,2).cast(pl.Int8),
-                pl.col("체결시각").str.zfill(9).str.slice(2,2).cast(pl.Int8),
-                pl.col("체결시각").str.zfill(9).str.slice(4,2).cast(pl.Int8),
-                pl.col("체결시각").str.zfill(9).str.slice(6,3).cast(pl.Int32) * 1_000,
-                time_zone=TZ,
-            ).alias("ts")
-        )
-        .drop(["체결일자", "체결시각"])
-        .sort("ts")
-        .group_by_dynamic(
-            index_column="ts",
-            every="1m",
-            by="종목코드",
-            closed="left",
-        )
-        .agg(
-            open=pl.col("체결가격").first(),
-            high=pl.col("체결가격").max(),
-            low =pl.col("체결가격").min(),
-            close=pl.col("체결가격").last(),
-            volume=pl.col("체결수량").sum(),
-        )
-        .sink_parquet(out, compression="zstd", maintain_order=True)
+        # ① 먼저 날짜 목록만 추출 (칼럼 1개라 메모리 미미)
+        dates = (
+            pl.scan_csv(
+                p,
+                separator="|",
+                has_header=False,
+                new_columns=COLS,
+                low_memory=True,
+            )
+            .select(["체결일자"])
+            .unique()
+            .sort("체결일자")
+            .collect(streaming=True)["체결일자"]
+            .to_list()
         )
 
-        return str(out)
+        print(dates)
+
+
+
+    # ── ② 날짜별 처리 ──────────────────────────────────────
+        for d in dates:
+            print("date", d)
+            date_str = f"{d:08d}"
+            out = OUT_DIR / f"{date_str}_1m.parquet"
+            if out.exists():
+                continue
+
+            # ── (a) 날짜 필터 + ts 생성  ───────────────────────
+            lf = (
+                pl.scan_csv(
+                    p, separator="|", has_header=False,
+                    new_columns=COLS, low_memory=True,
+                    infer_schema_length=1000,
+                )
+                .select(KEEP)
+                .filter(pl.col("체결일자") == d)        # push-down
+                .with_columns(
+                    pl.datetime(
+                        (pl.col("체결일자") // 10_000),
+                        ((pl.col("체결일자") // 100) % 100).cast(pl.UInt8),
+                        (pl.col("체결일자") % 100).cast(pl.UInt8),
+                        (pl.col("체결시각") // 10_000_000).cast(pl.UInt8),
+                        ((pl.col("체결시각") // 100_000) % 100).cast(pl.UInt8),
+                        ((pl.col("체결시각") //   1_000) % 100).cast(pl.UInt8),
+                        (pl.col("체결시각") % 1_000) * 1_000,
+                        time_zone=TZ,
+                    ).alias("ts")
+                )
+                .drop(["체결일자", "체결시각"])
+            )
+
+            # ── (b) 먼저 "정렬됐다고 가정"하고 group_by_dynamic 시도 ──
+            try:
+                (
+                    lf.with_columns(pl.col("ts").set_sorted())   # 0.21+
+                    .group_by_dynamic(index_column="ts", every="1m",
+                                        by="종목코드", closed="left")
+                    .agg(
+                        open   = pl.col("체결가격").first(),
+                        high   = pl.col("체결가격").max(),
+                        low    = pl.col("체결가격").min(),
+                        close  = pl.col("체결가격").last(),
+                        volume = pl.col("체결수량").sum(),
+                    )
+                    .sink_parquet(out, compression="zstd",
+                                    row_group_size=50_000)
+                )
+            except pl.ComputeError:
+                # ── (c) "정렬 안 됨" 오류가 난 경우에만 **부분 정렬** ──
+                print(f"{d} sort error occured")
+
+                (
+                    lf.sort("ts")                              # 하루치만 정렬
+                    .group_by_dynamic(index_column="ts", every="1m",
+                                        by="종목코드", closed="left")
+                    .agg(
+                        open   = pl.col("체결가격").first(),
+                        high   = pl.col("체결가격").max(),
+                        low    = pl.col("체결가격").min(),
+                        close  = pl.col("체결가격").last(),
+                        volume = pl.col("체결수량").sum(),
+                    )
+                    .sink_parquet(out, compression="zstd", row_group_size=50_000)
+                )
+
+            out_paths.append(str(out))
+
+        return out_paths
     # 🎉 Dynamic mapping fan-out
     convert.expand(file_path=list_files())
 
