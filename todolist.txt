@@ -1,0 +1,8 @@
+1. 장 중 filter
+2. 종목 코드, 코스피, 코스닥 표시
+2 date, universe_list 만들어서 filter > parquet
+하루에 50개 정도의 공시가 올라옴 > 기업 50개 정도
+라벨링 1분, 3분, 10분, 30분, 1시간 기준
+
+
+openAI API summarize 연결
