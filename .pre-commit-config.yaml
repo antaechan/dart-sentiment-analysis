@@ -1,0 +1,25 @@
+# .pre-commit-config.yaml ― 2025-07-08 기준 최신 버전
+repos:
+  - repo: https://github.com/psf/black
+    rev: 25.1.0        # 25.1.0 – 2025-01-29 릴리스 :contentReference[oaicite:0]{index=0}
+    hooks:
+      - id: black
+        # 필요하면 --line-length 등 args 추가 가능
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 6.0.1         # 6.0.1 – 2025-02-26 릴리스 :contentReference[oaicite:1]{index=1}
+    hooks:
+      - id: isort
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0        # 5.0.0 – 2024-10-07 릴리스 :contentReference[oaicite:2]{index=2}
+    hooks:
+      - id: trailing-whitespace   # 불필요 공백 제거
+      - id: end-of-file-fixer     # EOF 공백/개행 정리
+      - id: check-yaml            # YAML 문법 검사
+
+  - repo: https://github.com/PyCQA/autoflake
+    rev: v2.3.1        # 2.3.1 – 2024-03-13 릴리스 :contentReference[oaicite:3]{index=3}
+    hooks:
+      - id: autoflake
+        args: [--remove-all-unused-imports, --in-place]

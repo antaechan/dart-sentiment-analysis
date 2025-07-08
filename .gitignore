@@ -7,3 +7,5 @@ events_db/
 *.pyc
 
 config
+
+venv/

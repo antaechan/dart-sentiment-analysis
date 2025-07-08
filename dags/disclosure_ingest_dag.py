@@ -1,53 +1,56 @@
 from __future__ import annotations
-from airflow.decorators import dag, task
-from datetime import datetime, timedelta, date
+
 import os
-import time
-import asyncpg
-import  pandas as pd
-from telethon.sync import TelegramClient
-from openai import OpenAI
-from dotenv import load_dotenv
-from telethon.sessions import StringSession
-from telethon.errors import FloodWaitError
 import re
-import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import insert
+import time
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
+
 import FinanceDataReader as fdr
+import pandas as pd
 import polars as pl
+import sqlalchemy as sa
+from airflow.decorators import dag, task
+from dotenv import load_dotenv
+from sqlalchemy.dialects.postgresql import insert
+from telethon.errors import FloodWaitError
+from telethon.sessions import StringSession
+from telethon.sync import TelegramClient
 
 KST = ZoneInfo("Asia/Seoul")
 load_dotenv()
 
-API_ID     = os.getenv("API_ID")
-API_HASH   = os.getenv("API_HASH")
-CHANNEL    = os.getenv("CHANNEL_USERNAME")
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
+CHANNEL = os.getenv("CHANNEL_USERNAME")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 SESSION = os.getenv("TG_SESSION")
 
 # START = date(2022, 5, 1)
 START = date(2023, 11, 1)
-END   = date(2023, 12, 31)
+END = date(2023, 12, 31)
 
 # ────── 정규식 헬퍼 ──────
 _rx_company = re.compile(
     r"(?:기업명|회사명)\s*[:：]\s*([^\(\n]+)"  # ‘기업명:’ 또는 ‘회사명 :’ 모두 허용
 )
 _rx_report = re.compile(
-    r"보고서명\s*[:：]\s*(.+)"                # ‘보고서명 :’, 전각 콜론(：)도 허용
+    r"보고서명\s*[:：]\s*(.+)"  # ‘보고서명 :’, 전각 콜론(：)도 허용
 )
+
 
 def _extract_company(text: str) -> str:
     for line in text.split("\n"):
-        m = _rx_company.search(line)   # match → search 로 변경
+        m = _rx_company.search(line)  # match → search 로 변경
         if m:
             return m.group(1).strip()
     return ""
 
+
 def _extract_report(text: str) -> str:
-    m = _rx_report.search(text)        # 한 번에 검색
+    m = _rx_report.search(text)  # 한 번에 검색
     return m.group(1).strip() if m else ""
+
 
 # ──────────────────────
 # 헬퍼 : 월 단위 범위 생성
@@ -59,21 +62,25 @@ def month_ranges(start: date, end: date):
         yield (d, min(next_m - timedelta(days=1), end))
         d = next_m
 
-def upsert_do_nothing(table, conn, keys, data_iter):           # ➋
-        rows = [dict(zip(keys, row)) for row in data_iter]
-        if not rows:
-            return
-        stmt = (insert(table.table)                                  # ➌
-                .values(rows)
-                .on_conflict_do_nothing(index_elements=['id']))      # ➍
-        conn.execute(stmt)
+
+def upsert_do_nothing(table, conn, keys, data_iter):  # ➋
+    rows = [dict(zip(keys, row)) for row in data_iter]
+    if not rows:
+        return
+    stmt = (
+        insert(table.table)  # ➌
+        .values(rows)
+        .on_conflict_do_nothing(index_elements=["id"])
+    )  # ➍
+    conn.execute(stmt)
+
 
 @dag(
     start_date=datetime(2025, 7, 1),
-    schedule="@once",         # 手動 trigger or once
+    schedule="@once",  # 手動 trigger or once
     catchup=False,
     max_active_tasks=1,
-    tags=["telegram","backfill"],
+    tags=["telegram", "backfill"],
 )
 def disclosure_ingest_dag():
     # 1) 기간 리스트 산출
@@ -87,15 +94,20 @@ def disclosure_ingest_dag():
         d1, d2 = period
         all_msgs = []
         # d2 마지막 날의 다음 날 00:00(KST) → UTC 로 변환
-        offset_d2_kst = datetime.combine(d2 + timedelta(days=1), datetime.min.time(), tzinfo=KST)
+        offset_d2_kst = datetime.combine(
+            d2 + timedelta(days=1), datetime.min.time(), tzinfo=KST
+        )
         offset_d2_utc = offset_d2_kst.astimezone(ZoneInfo("UTC"))
 
         with TelegramClient(StringSession(SESSION), API_ID, API_HASH) as tg:
-            for msg in tg.iter_messages(CHANNEL,
-                                        offset_date=offset_d2_utc,
-                                        limit=2500,
-                                        wait_time=0,
-                                        reverse=False):
+            for msg in tg.iter_messages(
+                CHANNEL,
+                offset_date=offset_d2_utc,
+                limit=2500,
+                wait_time=0,
+                reverse=False,
+            ):
+
                 try:
                     # ↙️ ① KST 로 변환 후 date 비교
                     disclosed_at_KST = msg.date.astimezone(KST)
@@ -108,16 +120,18 @@ def disclosure_ingest_dag():
                         continue
 
                     company_name = _extract_company(text)
-                    report_name  = _extract_report(text)
+                    report_name = _extract_report(text)
 
-                    all_msgs.append({
-                        "id":msg.id,
-                        "company_name": company_name,
-                        "report_name": report_name,
-                        "disclosed_at": disclosed_at_KST,
-                        "summary_kr": None,
-                        "raw": text
-                    })
+                    all_msgs.append(
+                        {
+                            "id": msg.id,
+                            "company_name": company_name,
+                            "report_name": report_name,
+                            "disclosed_at": disclosed_at_KST,
+                            "summary_kr": None,
+                            "raw": text,
+                        }
+                    )
                     if len(all_msgs) % 100 == 0:
                         print(f"fetched {len(all_msgs)} messages")
                 except FloodWaitError as e:
@@ -125,8 +139,6 @@ def disclosure_ingest_dag():
                     time.sleep(e.seconds)
 
             return all_msgs  # XCom push (작은 리스트면 OK)
-
-    
 
     # 3) 요약 + SQL 적재
     @task
@@ -138,8 +150,8 @@ def disclosure_ingest_dag():
         POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
         POSTGRES_DB = os.getenv("POSTGRES_DB")
         POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-        
-        db_url = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@postgres_events:{POSTGRES_PORT}/{POSTGRES_DB}"   
+
+        db_url = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@postgres_events:{POSTGRES_PORT}/{POSTGRES_DB}"
         df = pd.DataFrame.from_records(records)
 
         engine = sa.create_engine(db_url, pool_pre_ping=True, future=True)
@@ -154,7 +166,7 @@ def disclosure_ingest_dag():
                 company_name  TEXT,
                 report_name   TEXT,
                 disclosed_at TIMESTAMPTZ,
-                summary_kr   TEXT,   
+                summary_kr   TEXT,
                 raw          TEXT,
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -193,24 +205,24 @@ def disclosure_ingest_dag():
     @task
     def label_stock_code(records: list[dict]):
         """종목코드를 기반으로 종목명을 라벨링하고 SQL DB에 저장"""
-        
+
         if not records:
             return records
-            
+
         # 기존 records를 DataFrame으로 변환
         df = pl.DataFrame(records)
-        
+
         # KRX 상장 종목 정보 가져오기
         listing = (
-            pl.from_pandas(
-                fdr.StockListing("KRX")[["ISU_CD", "Name", "Market"]]
+            pl.from_pandas(fdr.StockListing("KRX")[["ISU_CD", "Name", "Market"]])
+            .rename(
+                {"ISU_CD": "stock_code", "Name": "company_name", "Market": "market"}
             )
-            .rename({"ISU_CD": "stock_code", "Name": "company_name", "Market": "market"})
             .with_columns(pl.col("stock_code").cast(pl.Utf8))
             .unique(subset="stock_code")
             .lazy()
         )
-        
+
         # company_name에서 종목코드 추출 후 종목명 매칭
         result = (
             df.lazy()
@@ -218,7 +230,7 @@ def disclosure_ingest_dag():
             .drop_nulls("company_name")
             .collect(streaming=True)
         )
-        
+
         return result.to_dicts()
 
     # DAG 의존성
@@ -226,6 +238,6 @@ def disclosure_ingest_dag():
     fetched = fetch_range.expand(period=ranges)
     labeled = label_stock_code.expand(records=fetched)
     load_to_sql_db.expand(records=labeled)
-    
+
 
 dag = disclosure_ingest_dag()
