@@ -14,6 +14,8 @@ import re
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 from zoneinfo import ZoneInfo
+import FinanceDataReader as fdr
+import polars as pl
 
 KST = ZoneInfo("Asia/Seoul")
 load_dotenv()
@@ -128,7 +130,7 @@ def disclosure_ingest_dag():
 
     # 3) 요약 + SQL 적재
     @task
-    def summarize_and_insert(records: list[dict]):
+    def load_to_sql_db(records: list[dict]):
         if not records:
             return 0
 
@@ -147,6 +149,8 @@ def disclosure_ingest_dag():
             """
             CREATE TABLE IF NOT EXISTS disclosure_events (
                 id           BIGINT PRIMARY KEY,
+                stock_code   TEXT,
+                market       TEXT,
                 company_name  TEXT,
                 report_name   TEXT,
                 disclosed_at TIMESTAMPTZ,
@@ -162,6 +166,8 @@ def disclosure_ingest_dag():
 
         dtype_map = {
             "id": sa.BigInteger(),
+            "stock_code": sa.Text(),
+            "market": sa.Text(),
             "company_name": sa.Text(),
             "report_name": sa.Text(),
             "disclosed_at": sa.TIMESTAMP(timezone=True),
@@ -184,9 +190,42 @@ def disclosure_ingest_dag():
         print(f"Inserted {len(records)} rows into disclosure_events")
         return len(records)
 
+    @task
+    def label_stock_code(records: list[dict]):
+        """종목코드를 기반으로 종목명을 라벨링하고 SQL DB에 저장"""
+        
+        if not records:
+            return records
+            
+        # 기존 records를 DataFrame으로 변환
+        df = pl.DataFrame(records)
+        
+        # KRX 상장 종목 정보 가져오기
+        listing = (
+            pl.from_pandas(
+                fdr.StockListing("KRX")[["ISU_CD", "Name", "Market"]]
+            )
+            .rename({"ISU_CD": "stock_code", "Name": "company_name", "Market": "market"})
+            .with_columns(pl.col("stock_code").cast(pl.Utf8))
+            .unique(subset="stock_code")
+            .lazy()
+        )
+        
+        # company_name에서 종목코드 추출 후 종목명 매칭
+        result = (
+            df.lazy()
+            .join(listing, on="company_name", how="left")
+            .drop_nulls("company_name")
+            .collect(streaming=True)
+        )
+        
+        return result.to_dicts()
+
     # DAG 의존성
     ranges = make_ranges()
     fetched = fetch_range.expand(period=ranges)
-    summarize_and_insert.expand(records=fetched)
+    labeled = label_stock_code.expand(records=fetched)
+    load_to_sql_db.expand(records=labeled)
+    
 
 dag = disclosure_ingest_dag()
