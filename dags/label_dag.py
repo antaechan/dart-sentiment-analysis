@@ -29,6 +29,12 @@ DB_URL = (
 ENGINE = sa.create_engine(DB_URL, pool_pre_ping=True, future=True)
 
 
+# ---------- helper ----------
+def to_min(dt):
+    """초·마이크로초를 0으로 만들어 분 단위로 맞춘다."""
+    return dt.replace(second=0, microsecond=0)
+
+
 @dag(
     start_date=datetime(2025, 7, 4),
     schedule="@once",  # 필요에 따라 cron 으로 변경
@@ -78,6 +84,7 @@ def event_reaction_returns_dag():
             df = pd.read_sql(sql, conn)
 
         if df.empty:
+            print("No events found")
             return []
 
         df["event_ts"] = df["ts_kst"].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -104,6 +111,7 @@ def event_reaction_returns_dag():
         updates = []  # [{event_id:…, ret_1m:…}, …] 누적
 
         for date_int, ev_list in events_by_date.items():
+
             pq_path = RAW_PARQUET_DIR / f"{date_int:08d}_1m.parquet"
             if not pq_path.exists():
                 continue
@@ -112,14 +120,20 @@ def event_reaction_returns_dag():
                 pq_path, columns=["ts", "종목코드", "close"]
             ).rename({"종목코드": "code"})
 
+            # ---------- 가격 맵 ----------
             price_map = {
                 (row["code"], row["ts"].replace(tzinfo=TZ)): row["close"]
                 for row in ohlcv.iter_rows(named=True)
             }
 
+            RET_COLS = {1: "ret_1m", 3: "ret_3m", 10: "ret_10m", 60: "ret_60m"}
+
             for ev in ev_list:
-                ts0 = datetime.fromisoformat(ev["event_ts"]).replace(tzinfo=TZ)
+                ts0 = to_min(datetime.fromisoformat(ev["event_ts"]).replace(tzinfo=TZ))
                 p0 = price_map.get((ev["stock_code"], ts0))
+                print("ts0: ", ts0)
+                print("p0: ", p0)
+
                 if p0 is None or p0 == 0:
                     continue
 
@@ -129,12 +143,19 @@ def event_reaction_returns_dag():
                         (ev["stock_code"], ts0 + timedelta(minutes=lag))
                     )
                     if p_lag:
-                        rec[f"ret_{lag}m"] = (p_lag / p0 - 1.0) * 100.0
-                if len(rec) > 1:  # 수익률이 하나 이상 계산된 경우
+                        rec[RET_COLS[lag]] = round((p_lag / p0 - 1.0) * 100.0, 2)
+
+                # ★ 계산된 수익률이 하나라도 있을 때만 업데이트
+                if any(k in rec for k in RET_COLS.values()):
+                    # ★ 누락된 칼럼을 None 으로 채워 넣음
+                    for col in RET_COLS.values():
+                        rec.setdefault(col, None)
                     updates.append(rec)
 
         if not updates:
             return
+
+        print("updates: ", updates)
 
         # ---------- bulk UPDATE ----------
         with ENGINE.begin() as conn:
@@ -151,7 +172,8 @@ def event_reaction_returns_dag():
             )
 
             # executemany → 한 번에 다중 업데이트
-            conn.execute(stmt, updates)
+            result = conn.execute(stmt, updates)
+            print("rows matched → modified:", result.rowcount)
 
     # ───────────────────────── DAG 의 Task 의존성 ───────────────────
     ensure_columns()
