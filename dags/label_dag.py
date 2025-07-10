@@ -64,7 +64,7 @@ def event_reaction_returns_dag():
     def fetch_events() -> list[dict]:
         """
         disclosure_events 중,
-        * 발표 시각이 국내 장중(09:00~15:30, KST) **이전** 에 발생했고
+        * 발표 시각이 국내 장중(09:00~15:30, KST) 사이에 발생했고
         * OHLCV Parquet 파일이 존재하는 날짜만 반환
         반환 형식: [{'event_id': …, 'ts': datetime, 'code': str}, …]
         """
@@ -78,8 +78,14 @@ def event_reaction_returns_dag():
             WHERE stock_code IS NOT NULL
               AND disclosed_at IS NOT NULL
               -- 09:00~15:30 사이 공시만 (KST 기준)
-              AND EXTRACT(HOUR   FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 9 AND 15
-              AND EXTRACT(MINUTE FROM disclosed_at AT TIME ZONE 'Asia/Seoul') <= 30
+              AND (
+                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 9)
+                  OR
+                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 10 AND 14)
+                  OR
+                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 15
+                   AND EXTRACT(MINUTE FROM disclosed_at AT TIME ZONE 'Asia/Seoul') <= 30)
+              )
             """
             df = pd.read_sql(sql, conn)
 
