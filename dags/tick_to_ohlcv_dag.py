@@ -13,8 +13,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-RAW_DIR = Path("/opt/airflow/data/KOSPI/unzip")
-OUT_DIR = Path("/opt/airflow/data/KOSPI/ohlcv")
+KOSPI_RAW_DIR = Path("/opt/airflow/data/KOSPI/unzip")
+KOSPI_OUT_DIR = Path("/opt/airflow/data/KOSPI/ohlcv")
+KOSDAQ_RAW_DIR = Path("/opt/airflow/data/KOSDAQ/unzip")
+KOSDAQ_OUT_DIR = Path("/opt/airflow/data/KOSDAQ/ohlcv")
 TZ = "Asia/Seoul"
 
 COLS = [
@@ -83,14 +85,23 @@ KEEP = ["종목코드", "체결가격", "체결수량", "체결일자", "체결�
 def tick_to_ohlcv_dag():
 
     @task
-    def list_files() -> list[str]:
+    def get_files_to_process(year_month_list: list[str]) -> list[str]:
         """Return all raw tick files that *don't* have a matching parquet yet."""
-        return [
+        kospi_files = [
             str(p)
-            for p in RAW_DIR.iterdir()
+            for p in KOSPI_RAW_DIR.iterdir()
             if p.name.endswith(".dat")
-            and not (OUT_DIR / f"{p.stem}_1m.parquet").exists()
+            and any(year_month in p.name for year_month in year_month_list)
         ]
+
+        kosdaq_files = [
+            str(p)
+            for p in KOSDAQ_RAW_DIR.iterdir()
+            if p.name.endswith(".dat")
+            and any(year_month in p.name for year_month in year_month_list)
+        ]
+
+        return kospi_files + kosdaq_files
 
     @task
     def convert(file_path: str) -> list[str]:
@@ -101,6 +112,14 @@ def tick_to_ohlcv_dag():
         """
         p = Path(file_path)
         out_paths: list[str] = []
+
+        # 파일 경로에 따라 출력 디렉토리 결정
+        if "KOSPI" in str(p):
+            OUT_DIR = KOSPI_OUT_DIR
+        elif "KOSDAQ" in str(p):
+            OUT_DIR = KOSDAQ_OUT_DIR
+        else:
+            raise ValueError(f"Unknown market type for file: {p}")
 
         # ── ① tick 파일 안에 실제로 존재하는 '체결일자' 목록 ───────────────────────
         dates: list[int] = (
@@ -117,10 +136,10 @@ def tick_to_ohlcv_dag():
             .collect(streaming=True)["체결일자"]
             .to_list()
         )
-        if not dates:
-            return out_paths  # 비어 있으면 바로 종료
 
         print(dates)
+        if not dates:
+            return out_paths  # 비어 있으면 바로 종료
 
         # ── ② disclosure_events에서 공시가 있었던 종목 universe 확보 ────────────────
         #     공시 테이블은 YYYYMMDD → 종목코드 배열(dict) 형태로 변환
@@ -223,7 +242,8 @@ def tick_to_ohlcv_dag():
         return out_paths
 
     # 🎉 Dynamic mapping fan-out
-    convert.expand(file_path=list_files())
+    files = get_files_to_process(year_month_list=["2023_12"])
+    convert.expand(file_path=files)
 
 
 dag = tick_to_ohlcv_dag()
