@@ -12,9 +12,10 @@ import sqlalchemy as sa
 from airflow.decorators import dag, task
 
 # ─────────── 공통 상수 ───────────────────────────────────────────────
-RAW_PARQUET_DIR = Path("/opt/airflow/data/KOSPI/ohlcv")  # 1 분 OHLCV 저장소
+KOSPI_PARQUET_DIR = Path("/opt/airflow/data/KOSPI/ohlcv")  # KOSPI 1분 OHLCV 저장소
+KOSDAQ_PARQUET_DIR = Path("/opt/airflow/data/KOSDAQ/ohlcv")  # KOSDAQ 1분 OHLCV 저장소
 TZ = zoneinfo.ZoneInfo("Asia/Seoul")
-LAGS_MIN = [1, 3, 10, 60]  # 분 단위 지연
+LAGS_MIN = [1, 3, 10, 15, 30, 60]  # 분 단위 지연
 
 
 # ─────────── DB 커넥션 ─────────────────────────────────────────────
@@ -46,7 +47,7 @@ def event_reaction_returns_dag():
     @task
     def ensure_columns() -> None:
         """
-        disclosure_events 테이블에 수익률 컬럼(ret_1m, ret_3m, ret_10m, ret_60m)이
+        disclosure_events 테이블에 수익률 컬럼(ret_1m, ret_3m, ret_10m, ret_15m, ret_30m, ret_60m)이
         없으면 자동으로 추가합니다.
         """
         alter_sql = """
@@ -54,6 +55,8 @@ def event_reaction_returns_dag():
             ADD COLUMN IF NOT EXISTS ret_1m  DOUBLE PRECISION,
             ADD COLUMN IF NOT EXISTS ret_3m  DOUBLE PRECISION,
             ADD COLUMN IF NOT EXISTS ret_10m DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ret_15m DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ret_30m DOUBLE PRECISION,
             ADD COLUMN IF NOT EXISTS ret_60m DOUBLE PRECISION;
         """
         with ENGINE.begin() as conn:
@@ -66,17 +69,19 @@ def event_reaction_returns_dag():
         disclosure_events 중,
         * 발표 시각이 국내 장중(09:00~15:30, KST) 사이에 발생했고
         * OHLCV Parquet 파일이 존재하는 날짜만 반환
-        반환 형식: [{'event_id': …, 'ts': datetime, 'code': str}, …]
+        반환 형식: [{'event_id': …, 'ts': datetime, 'code': str, 'market': str}, …]
         """
         with ENGINE.connect() as conn:
             sql = """
             SELECT
                 id                    AS event_id,
                 (disclosed_at AT TIME ZONE 'Asia/Seoul') AS ts_kst,
-                stock_code
+                stock_code,
+                market
             FROM disclosure_events
             WHERE stock_code IS NOT NULL
               AND disclosed_at IS NOT NULL
+              AND market IN ('KOSPI', 'KOSDAQ')
               -- 09:00~15:30 사이 공시만 (KST 기준)
               AND (
                   (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 9)
@@ -96,7 +101,7 @@ def event_reaction_returns_dag():
         df["event_ts"] = df["ts_kst"].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
         df["date_int"] = df["ts_kst"].dt.strftime("%Y%m%d").astype(int)
 
-        return df[["event_id", "stock_code", "event_ts", "date_int"]].to_dict(
+        return df[["event_id", "stock_code", "event_ts", "date_int", "market"]].to_dict(
             orient="records"
         )
 
@@ -117,46 +122,47 @@ def event_reaction_returns_dag():
         updates = []  # [{event_id:…, ret_1m:…}, …] 누적
 
         for date_int, ev_list in events_by_date.items():
+            # 시장별로 이벤트 그룹화
+            kospi_events = [ev for ev in ev_list if ev["market"] == "KOSPI"]
+            kosdaq_events = [ev for ev in ev_list if ev["market"] == "KOSDAQ"]
 
-            pq_path = RAW_PARQUET_DIR / f"{date_int:08d}_1m.parquet"
-            if not pq_path.exists():
-                continue
+            # KOSPI 이벤트 처리
+            if kospi_events:
+                kospi_pq_path = KOSPI_PARQUET_DIR / f"{date_int:08d}_1m.parquet"
+                if kospi_pq_path.exists():
+                    ohlcv = pl.read_parquet(
+                        kospi_pq_path, columns=["ts", "종목코드", "close"]
+                    ).rename({"종목코드": "code"})
 
-            ohlcv = pl.read_parquet(
-                pq_path, columns=["ts", "종목코드", "close"]
-            ).rename({"종목코드": "code"})
+                    # 가격 맵 생성
+                    price_map = {
+                        (row["code"], row["ts"].replace(tzinfo=TZ)): row["close"]
+                        for row in ohlcv.iter_rows(named=True)
+                    }
 
-            # ---------- 가격 맵 ----------
-            price_map = {
-                (row["code"], row["ts"].replace(tzinfo=TZ)): row["close"]
-                for row in ohlcv.iter_rows(named=True)
-            }
-
-            RET_COLS = {1: "ret_1m", 3: "ret_3m", 10: "ret_10m", 60: "ret_60m"}
-
-            for ev in ev_list:
-                ts0 = to_min(datetime.fromisoformat(ev["event_ts"]).replace(tzinfo=TZ))
-                p0 = price_map.get((ev["stock_code"], ts0))
-                print("ts0: ", ts0)
-                print("p0: ", p0)
-
-                if p0 is None or p0 == 0:
-                    continue
-
-                rec = {"event_id": ev["event_id"]}
-                for lag in LAGS_MIN:
-                    p_lag = price_map.get(
-                        (ev["stock_code"], ts0 + timedelta(minutes=lag))
+                    # KOSPI 이벤트들의 수익률 계산
+                    updates.extend(
+                        calculate_returns_for_events(kospi_events, price_map)
                     )
-                    if p_lag:
-                        rec[RET_COLS[lag]] = round((p_lag / p0 - 1.0) * 100.0, 2)
 
-                # ★ 계산된 수익률이 하나라도 있을 때만 업데이트
-                if any(k in rec for k in RET_COLS.values()):
-                    # ★ 누락된 칼럼을 None 으로 채워 넣음
-                    for col in RET_COLS.values():
-                        rec.setdefault(col, None)
-                    updates.append(rec)
+            # KOSDAQ 이벤트 처리
+            if kosdaq_events:
+                kosdaq_pq_path = KOSDAQ_PARQUET_DIR / f"{date_int:08d}_1m.parquet"
+                if kosdaq_pq_path.exists():
+                    ohlcv = pl.read_parquet(
+                        kosdaq_pq_path, columns=["ts", "종목코드", "close"]
+                    ).rename({"종목코드": "code"})
+
+                    # 가격 맵 생성
+                    price_map = {
+                        (row["code"], row["ts"].replace(tzinfo=TZ)): row["close"]
+                        for row in ohlcv.iter_rows(named=True)
+                    }
+
+                    # KOSDAQ 이벤트들의 수익률 계산
+                    updates.extend(
+                        calculate_returns_for_events(kosdaq_events, price_map)
+                    )
 
         if not updates:
             return
@@ -172,6 +178,8 @@ def event_reaction_returns_dag():
                     ret_1m  = COALESCE(:ret_1m,  d.ret_1m),
                     ret_3m  = COALESCE(:ret_3m,  d.ret_3m),
                     ret_10m = COALESCE(:ret_10m, d.ret_10m),
+                    ret_15m = COALESCE(:ret_15m, d.ret_15m),
+                    ret_30m = COALESCE(:ret_30m, d.ret_30m),
                     ret_60m = COALESCE(:ret_60m, d.ret_60m)
                 WHERE d.id = :event_id
                 """
@@ -181,9 +189,47 @@ def event_reaction_returns_dag():
             result = conn.execute(stmt, updates)
             print("rows matched → modified:", result.rowcount)
 
+    def calculate_returns_for_events(events: list[dict], price_map: dict) -> list[dict]:
+        """이벤트 리스트에 대해 수익률을 계산하는 헬퍼 함수"""
+        RET_COLS = {
+            1: "ret_1m",
+            3: "ret_3m",
+            10: "ret_10m",
+            15: "ret_15m",
+            30: "ret_30m",
+            60: "ret_60m",
+        }
+        updates = []
+
+        for ev in events:
+            ts0 = to_min(datetime.fromisoformat(ev["event_ts"]).replace(tzinfo=TZ))
+            p0 = price_map.get((ev["stock_code"], ts0))
+            print("ts0: ", ts0)
+            print("p0: ", p0)
+
+            if p0 is None or p0 == 0:
+                continue
+
+            rec = {"event_id": ev["event_id"]}
+            for lag in LAGS_MIN:
+                p_lag = price_map.get((ev["stock_code"], ts0 + timedelta(minutes=lag)))
+                if p_lag:
+                    rec[RET_COLS[lag]] = round((p_lag / p0 - 1.0) * 100.0, 2)
+
+            # ★ 계산된 수익률이 하나라도 있을 때만 업데이트
+            if any(k in rec for k in RET_COLS.values()):
+                # ★ 누락된 칼럼을 None 으로 채워 넣음
+                for col in RET_COLS.values():
+                    rec.setdefault(col, None)
+                updates.append(rec)
+
+        return updates
+
     # ───────────────────────── DAG 의 Task 의존성 ───────────────────
-    ensure_columns()
-    compute_returns(fetch_events())
+    columns_task = ensure_columns()
+    events_task = fetch_events()
+    returns_task = compute_returns(events_task)
+    columns_task >> returns_task
 
 
 dag = event_reaction_returns_dag()
