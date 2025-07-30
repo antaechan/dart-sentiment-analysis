@@ -92,25 +92,33 @@ def tick_to_ohlcv_dag():
     # ① 가공해야 할 tick 파일 목록
     @task
     def get_files_to_process(year_month_list: list[str]) -> list[str]:
+        print("[DEBUG] 처리할 연월:", year_month_list)
+
         kospi_files = [
             str(p)
             for p in KOSPI_RAW_DIR.iterdir()
             if p.name.endswith(".dat") and any(ym in p.name for ym in year_month_list)
         ]
+        print(f"[DEBUG] KOSPI 파일 수: {len(kospi_files)}")
+
         kosdaq_files = [
             str(p)
             for p in KOSDAQ_RAW_DIR.iterdir()
             if p.name.endswith(".dat") and any(ym in p.name for ym in year_month_list)
         ]
+        print(f"[DEBUG] KOSDAQ 파일 수: {len(kosdaq_files)}")
+
         return kospi_files + kosdaq_files
 
-    # ② (NEW) 공시 Universe 조회를 전용 Task로 분리
+    # ② (NEW) 공시 Universe 조회를 전용 Task로 분리
     @task
     def build_disclosure_universe(year_month_list: list[str]) -> dict[str, list[str]]:
         """
         year_month_list 예: ["2023_12", "2024_01"]
         ⇒ {YYYYMMDD: [stock_code, …]} 형식의 딕셔너리 반환
         """
+        print("[DEBUG] Universe 구축 시작")
+
         # (1) 쿼리 기간 계산 ────────────────────────────────────────────────
         month_ranges: list[tuple[date, date]] = []
         for ym in year_month_list:
@@ -118,6 +126,7 @@ def tick_to_ohlcv_dag():
             first = date(y, m, 1)
             last = first + relativedelta(months=1) - timedelta(days=1)
             month_ranges.append((first, last))
+            print(f"[DEBUG] 기간 추가: {first} ~ {last}")
 
         # (2) DB 연결 & 조회 ───────────────────────────────────────────────
         POSTGRES_USER = os.getenv("POSTGRES_USER")
@@ -129,7 +138,12 @@ def tick_to_ohlcv_dag():
             f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
             f"@postgres_events:{POSTGRES_PORT}/{POSTGRES_DB}"
         )
+        print("[DEBUG] DB 연결 시도:", db_url.replace(POSTGRES_PASSWORD, "****"))
+
         engine = sa.create_engine(db_url, pool_pre_ping=True, future=True)
+
+        for month_range in month_ranges:
+            print(f"[DEBUG] 기간 추가: {month_range[0]} ~ {month_range[1]}")
 
         # 여러 월을 하나의 쿼리로 처리 (BETWEEN OR …) -----------------------
         filters = " OR ".join(
@@ -145,6 +159,12 @@ def tick_to_ohlcv_dag():
             FROM disclosure_events
             WHERE ({filters})
               AND stock_code IS NOT NULL
+              AND (
+                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 9 AND 14)
+                  OR
+                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 15
+                  AND EXTRACT(MINUTE FROM disclosed_at AT TIME ZONE 'Asia/Seoul') <= 30)
+              )
             """
         )
 
@@ -155,6 +175,7 @@ def tick_to_ohlcv_dag():
 
         with engine.connect() as conn:
             df_events = pd.read_sql(sql, conn, params=params)
+            print(f"[DEBUG] 조회된 공시 건수: {len(df_events)}")
 
         # (3) 집계 & 딕셔너리화 ────────────────────────────────────────────
         events_pl = pl.from_pandas(df_events)
@@ -169,6 +190,9 @@ def tick_to_ohlcv_dag():
                 events["codes"].to_list(),
             )
         }
+        print(f"[DEBUG] Universe 구축 완료. 일자 수: {len(universe)}")
+        for date_str, codes in universe.items():
+            print(f"[DEBUG] {date_str}: 공시 종목 수 = {len(codes)}개")
         return universe
 
     # ③ tick → 1‑분 OHLCV 변환
@@ -180,6 +204,8 @@ def tick_to_ohlcv_dag():
         (b) Universe와 교차 →
         (c) 1‑분 OHLCV 생성
         """
+        print(f"[DEBUG] 파일 변환 시작: {file_path}")
+
         p = Path(file_path)
         out_paths: list[str] = []
 
@@ -191,16 +217,20 @@ def tick_to_ohlcv_dag():
         )
         if OUT_DIR is None:
             raise ValueError(f"Unknown market type for file: {p}")
+        print(f"[DEBUG] 출력 디렉터리: {OUT_DIR}")
 
         for date_str, codes in universe.items():
-            print(f"Processing date: {date_str}")
+            print(f"[DEBUG] 날짜 처리 중: {date_str}, 종목 수: {len(codes)}")
             if not codes:  # 공시 종목 없으면 skip
+                print(f"[DEBUG] {date_str}: 공시 종목 없음, 건너뜀")
                 continue
 
             out = OUT_DIR / f"{date_str}_1m.parquet"
             if out.exists():
+                print(f"[DEBUG] {date_str}: 이미 파일 존재, 건너뜀")
                 continue
 
+            print(f"[DEBUG] {date_str}: OHLCV 변환 시작")
             (
                 pl.scan_csv(
                     p,
@@ -242,16 +272,20 @@ def tick_to_ohlcv_dag():
                     close=pl.col("체결가격").last(),
                     volume=pl.col("체결수량").sum(),
                 )
-                .sink_parquet(out, compression="zstd", row_group_size=50_000)
+                .sink_parquet(out, compression="zstd", row_group_size=200_000)
             )
+            print(f"[DEBUG] {date_str}: OHLCV 변환 완료 → {out}")
             out_paths.append(str(out))
 
+        print(f"[DEBUG] 파일 변환 완료. 생성된 파일 수: {len(out_paths)}")
         return out_paths
 
     # ── DAG wiring ──────────────────────────────────────────────────────────
+    print("[DEBUG] DAG 실행 시작")
     files = get_files_to_process(year_month_list=["2023_12"])
     universe = build_disclosure_universe(year_month_list=["2023_12"])
     convert.partial(universe=universe).expand(file_path=files)
+    print("[DEBUG] DAG 설정 완료")
 
 
 dag = tick_to_ohlcv_dag()
