@@ -212,7 +212,8 @@ def tick_to_ohlcv_dag():
                 )
                 .select(KEEP)
                 .filter(
-                    (pl.col("체결일자") == date_str) & (pl.col("종목코드").is_in(codes))
+                    (pl.col("체결일자") == int(date_str))
+                    & (pl.col("종목코드").is_in(codes))
                 )
                 .with_columns(
                     pl.datetime(
