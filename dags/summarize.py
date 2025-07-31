@@ -142,28 +142,41 @@ def summarize_disclosure_events_batch_dag():
 
     @task
     def download_batch_output(batch: dict | None) -> list[dict]:
-        # 1) nothing came from the upstream task OR batch didn’t finish successfully
         if not batch or batch.get("status") != "completed":
             return []
 
-        # 2) pull the file-id from the dict
         output_file_id: str | None = batch.get("output_file_id")
         if not output_file_id:
-            # still play safe – don’t blow up the DAG
             return []
 
-        # 3) download content and parse
-        output_txt = client.files.retrieve_content(output_file_id)
-        summaries: list[dict] = []
-        for line in output_txt.splitlines():
+        txt = client.files.retrieve_content(output_file_id)
+        ok, failed = [], []
+        for line in txt.splitlines():
             obj = json.loads(line)
-            summaries.append(
-                {
-                    "id": int(obj["custom_id"]),
-                    "summary": obj["response"]["choices"][0]["message"]["content"],
-                }
-            )
-        return summaries
+            cid = int(obj["custom_id"])  # DB PK
+
+            # ── 성공(200) ─────────────────────────────
+            if obj.get("error") is None and obj["response"]["status_code"] == 200:
+                content = (
+                    obj["response"]["body"]["choices"][0]["message"]["content"]
+                    if obj["response"]["body"]["choices"]
+                    else None
+                )
+                ok.append({"id": cid, "summary": content})
+
+            # ── 실패 또는 비-200 ──────────────────────
+            else:
+                failed.append(
+                    {
+                        "id": cid,
+                        "status": obj.get("response", {}).get("status_code"),
+                        "error": obj.get("error"),
+                    }
+                )
+
+        if failed:
+            print(f"{len(failed)} requests failed/rejected → 첫 3건: {failed[:3]}")
+        return ok
 
     # ⑦ DB 업데이트
     @task
