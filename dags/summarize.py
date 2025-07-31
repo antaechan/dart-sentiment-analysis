@@ -139,13 +139,22 @@ def summarize_disclosure_events_batch_dag():
             time.sleep(poll_interval)
 
     # ⑥ 결과 다운로드 & 파싱
+
     @task
-    def download_batch_output(batch) -> list[dict]:
-        if not batch or batch.status != "completed":
+    def download_batch_output(batch: dict | None) -> list[dict]:
+        # 1) nothing came from the upstream task OR batch didn’t finish successfully
+        if not batch or batch.get("status") != "completed":
             return []
-        output_file_id = batch.output_file_id
+
+        # 2) pull the file-id from the dict
+        output_file_id: str | None = batch.get("output_file_id")
+        if not output_file_id:
+            # still play safe – don’t blow up the DAG
+            return []
+
+        # 3) download content and parse
         output_txt = client.files.retrieve_content(output_file_id)
-        summaries = []
+        summaries: list[dict] = []
         for line in output_txt.splitlines():
             obj = json.loads(line)
             summaries.append(
