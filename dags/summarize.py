@@ -37,11 +37,7 @@ ENGINE = sa.create_engine(DB_URL, pool_pre_ping=True, future=True)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-SYSTEM_PROMPT = (
-    "You are a helpful assistant to summarize the given text about a Korean "
-    "corporate report within 2–3 sentences. Please respond only in Korean."
-)
-
+SYSTEM_PROMPT = "You are a helpful assistant to summarize the given text about a Korean corporate report within 2~3 sentences. Please respond only in Korean."
 MODEL = "gpt-4.1-nano"
 
 
@@ -68,18 +64,24 @@ def summarize_disclosure_events_batch_dag():
 
     # ② 요약 대상 선택
     @task
-    def fetch_events_to_summarize(batch_size: int = 1000) -> list[dict]:
+    def fetch_events_to_summarize(
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> list[dict]:
         sql = """
             SELECT id, raw
             FROM disclosure_events
-            WHERE summary_kr IS NULL
-              AND raw IS NOT NULL
-              AND raw <> ''
-            ORDER BY id
-            LIMIT :limit
-            """
+            WHERE raw IS NOT NULL
+            AND raw <> ''
+            AND (disclosed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Seoul') >= :start_date
+            AND (disclosed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Seoul') <  :end_date
+            ORDER BY disclosed_at, id
+        """
+
         with ENGINE.connect() as conn:
-            result = conn.execute(sa.text(sql), {"limit": batch_size})
+            result = conn.execute(
+                sa.text(sql), {"start_date": start_date, "end_date": end_date}
+            )
             return [{"id": row.id, "raw": row.raw} for row in result]
 
     # ③ JSONL 파일 작성 & OpenAI 업로드
@@ -123,14 +125,17 @@ def summarize_disclosure_events_batch_dag():
 
     # ⑤ 완료 대기 (폴링)
     @task
-    def wait_batch_complete(batch_id: str | None, poll_interval: int = 30):
+    def wait_batch_complete(
+        batch_id: str | None, poll_interval: int = 30
+    ) -> dict | None:
+        """배치 완료까지 폴링 후 직렬화 가능한 dict 반환"""
         if batch_id is None:
             return None
+
         while True:
             batch = client.batches.retrieve(batch_id)
-            status = batch.status
-            if status in {"completed", "failed", "expired"}:
-                return batch  # 반환해서 downstream에서 상태 체크
+            if batch.status in {"completed", "failed", "expired"}:
+                return batch.model_dump()
             time.sleep(poll_interval)
 
     # ⑥ 결과 다운로드 & 파싱
@@ -173,7 +178,9 @@ def summarize_disclosure_events_batch_dag():
 
     # ─── DAG 의존성 체인 ──────────────────────────────────────────
     col = ensure_summary_column()
-    evts = fetch_events_to_summarize()
+    evts = fetch_events_to_summarize(
+        start_date=datetime(2023, 12, 1), end_date=datetime(2024, 12, 31)
+    )
 
     file_id = upload_batch_file(evts)
     batch_id = create_batch_job(file_id)
