@@ -272,7 +272,7 @@ def tick_to_ohlcv_dag():
                     close=pl.col("체결가격").last(),
                     volume=pl.col("체결수량").sum(),
                 )
-                .sink_parquet(out, compression="zstd", row_group_size=200_000)
+                .sink_parquet(out, compression="zstd", row_group_size=50_000)
             )
             print(f"[DEBUG] {date_str}: OHLCV 변환 완료 → {out}")
             out_paths.append(str(out))
