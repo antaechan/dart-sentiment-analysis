@@ -4,19 +4,17 @@ from __future__ import annotations
 import os
 import zoneinfo
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pandas as pd
 import polars as pl
 import sqlalchemy as sa
 from airflow.decorators import dag, task
+from dotenv import load_dotenv
 
-# ─────────── 공통 상수 ───────────────────────────────────────────────
-KOSPI_PARQUET_DIR = Path("/opt/airflow/data/KOSPI/ohlcv")  # KOSPI 1분 OHLCV 저장소
-KOSDAQ_PARQUET_DIR = Path("/opt/airflow/data/KOSDAQ/ohlcv")  # KOSDAQ 1분 OHLCV 저장소
-TZ = zoneinfo.ZoneInfo("Asia/Seoul")
+load_dotenv()
+from config import KOSDAQ_OUT_DIR, KOSPI_OUT_DIR, TZ
+
 LAGS_MIN = [1, 3, 10, 15, 30, 60]  # 분 단위 지연
-
 
 # ─────────── DB 커넥션 ─────────────────────────────────────────────
 POSTGRES_USER = os.getenv("POSTGRES_USER")
@@ -128,7 +126,7 @@ def event_reaction_returns_dag():
 
             # KOSPI 이벤트 처리
             if kospi_events:
-                kospi_pq_path = KOSPI_PARQUET_DIR / f"{date_int:08d}_1m.parquet"
+                kospi_pq_path = KOSPI_OUT_DIR / f"{date_int:08d}_1m.parquet"
                 if kospi_pq_path.exists():
                     ohlcv = pl.read_parquet(
                         kospi_pq_path, columns=["ts", "종목코드", "close"]
@@ -136,7 +134,10 @@ def event_reaction_returns_dag():
 
                     # 가격 맵 생성
                     price_map = {
-                        (row["code"], row["ts"].replace(tzinfo=TZ)): row["close"]
+                        (
+                            row["code"],
+                            row["ts"].replace(tzinfo=zoneinfo.ZoneInfo(TZ)),
+                        ): row["close"]
                         for row in ohlcv.iter_rows(named=True)
                     }
 
@@ -147,7 +148,7 @@ def event_reaction_returns_dag():
 
             # KOSDAQ 이벤트 처리
             if kosdaq_events:
-                kosdaq_pq_path = KOSDAQ_PARQUET_DIR / f"{date_int:08d}_1m.parquet"
+                kosdaq_pq_path = KOSDAQ_OUT_DIR / f"{date_int:08d}_1m.parquet"
                 if kosdaq_pq_path.exists():
                     ohlcv = pl.read_parquet(
                         kosdaq_pq_path, columns=["ts", "종목코드", "close"]
@@ -155,7 +156,10 @@ def event_reaction_returns_dag():
 
                     # 가격 맵 생성
                     price_map = {
-                        (row["code"], row["ts"].replace(tzinfo=TZ)): row["close"]
+                        (
+                            row["code"],
+                            row["ts"].replace(tzinfo=zoneinfo.ZoneInfo(TZ)),
+                        ): row["close"]
                         for row in ohlcv.iter_rows(named=True)
                     }
 
@@ -202,7 +206,11 @@ def event_reaction_returns_dag():
         updates = []
 
         for ev in events:
-            ts0 = to_min(datetime.fromisoformat(ev["event_ts"]).replace(tzinfo=TZ))
+            ts0 = to_min(
+                datetime.fromisoformat(ev["event_ts"]).replace(
+                    tzinfo=zoneinfo.ZoneInfo(TZ)
+                )
+            )
             p0 = price_map.get((ev["stock_code"], ts0))
             print("ts0: ", ts0)
             print("p0: ", p0)
