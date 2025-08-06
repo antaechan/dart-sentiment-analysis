@@ -82,9 +82,7 @@ def event_reaction_returns_dag():
               AND market IN ('KOSPI', 'KOSDAQ')
               -- 09:00~15:30 사이 공시만 (KST 기준)
               AND (
-                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 9)
-                  OR
-                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 10 AND 14)
+                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 9 AND 14)
                   OR
                   (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 15
                    AND EXTRACT(MINUTE FROM disclosed_at AT TIME ZONE 'Asia/Seoul') <= 30)
@@ -96,7 +94,10 @@ def event_reaction_returns_dag():
             print("No events found")
             return []
 
-        df["event_ts"] = df["ts_kst"].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+        df["ts_kst"] = df["ts_kst"].dt.tz_localize("Asia/Seoul")
+
+        # 문자열은 isoformat()으로( +09:00 형태 보장 )
+        df["event_ts"] = df["ts_kst"].apply(lambda x: x.isoformat())
         df["date_int"] = df["ts_kst"].dt.strftime("%Y%m%d").astype(int)
 
         return df[["event_id", "stock_code", "event_ts", "date_int", "market"]].to_dict(
@@ -212,8 +213,7 @@ def event_reaction_returns_dag():
                 )
             )
             p0 = price_map.get((ev["stock_code"], ts0))
-            print("ts0: ", ts0)
-            print("p0: ", p0)
+            print(f"ev: {ev}, ts0: {ts0}, p0: {p0}")
 
             if p0 is None or p0 == 0:
                 continue
