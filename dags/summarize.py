@@ -73,8 +73,8 @@ def summarize_disclosure_events_batch_dag():
             FROM disclosure_events
             WHERE raw IS NOT NULL
             AND raw <> ''
-            AND (disclosed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Seoul') >= :start_date
-            AND (disclosed_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Seoul') <  :end_date
+            AND  disclosed_at AT TIME ZONE 'Asia/Seoul' >= :start_date
+            AND  disclosed_at AT TIME ZONE 'Asia/Seoul' <= :end_date
             ORDER BY disclosed_at, id
         """
 
@@ -201,7 +201,7 @@ def summarize_disclosure_events_batch_dag():
     # ─── DAG 의존성 체인 ──────────────────────────────────────────
     col = ensure_summary_column()
     evts = fetch_events_to_summarize(
-        start_date=datetime(2023, 12, 1), end_date=datetime(2024, 12, 31)
+        start_date=datetime(2023, 12, 1), end_date=datetime(2023, 12, 2)
     )
 
     file_id = upload_batch_file(evts)

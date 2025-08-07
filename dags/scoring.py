@@ -42,7 +42,9 @@ with DAG(
 ) as dag:
 
     @task
-    def infer_and_update():
+    def infer_and_update(
+        start_date: datetime | None = None, end_date: datetime | None = None
+    ):
         """Infer sentiment for new events and update *disclosure_events*."""
 
         # -----------------------------------------------------------------
@@ -80,11 +82,24 @@ with DAG(
             """
             SELECT id, summary_kr
             FROM disclosure_events
-            WHERE summary_kr IS NOT NULL AND label IS NULL;
+            WHERE stock_code IS NOT NULL AND summary_kr IS NOT NULL AND label IS NULL AND market IN ('KOSPI', 'KOSDAQ')
+            AND disclosed_at AT TIME ZONE 'Asia/Seoul' >= :start_date
+            AND disclosed_at AT TIME ZONE 'Asia/Seoul' <= :end_date
+            AND (
+                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 9 AND 14)
+                  OR
+                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 15
+                   AND EXTRACT(MINUTE FROM disclosed_at AT TIME ZONE 'Asia/Seoul') <= 30)
+              )
+            ORDER BY disclosed_at, id;
             """
         )
         with engine.begin() as conn:
-            df = pd.read_sql(fetch_stmt, conn)
+            df = pd.read_sql(
+                fetch_stmt,
+                conn,
+                params={"start_date": start_date, "end_date": end_date},
+            )
 
         if df.empty:
             print("[sentiment_dag] No new disclosure events — nothing to do.")
@@ -103,7 +118,11 @@ with DAG(
         # -----------------------------------------------------------------
         sentences = df["summary_kr"].tolist()
         encodings = tokenizer(
-            sentences, padding=True, truncation=True, return_tensors="pt"
+            sentences,
+            padding=True,
+            truncation=True,
+            max_length=256,  # Set explicit max_length for Korean financial text
+            return_tensors="pt",
         )
         encodings = {k: v.to(device) for k, v in encodings.items()}
 
@@ -142,4 +161,4 @@ with DAG(
         print(f"[sentiment_dag] Updated {len(records)} disclosure_events rows.")
 
     # Bind task to DAG
-    infer_and_update()
+    infer_and_update(start_date=datetime(2023, 11, 1), end_date=datetime(2023, 11, 30))
