@@ -183,48 +183,113 @@ def parquet_to_ohlcv_dag():
                 continue
 
             print(f"[DEBUG] {date_str}: OHLCV 변환 시작 (codes: {len(codes)}개)")
-            (
-                pl.scan_parquet(
-                    PARTITION_DIR / f"체결일자={date_str}",
-                    hive_partitioning=True,
-                    low_memory=True,
+            print(f"[DEBUG] 대상 종목코드: {codes}")
+
+            # 파티션 데이터 확인
+            partition_path = PARTITION_DIR / f"체결일자={date_str}"
+            print(f"[DEBUG] 파티션 경로: {partition_path}")
+
+            # 실제 파티션에서 해당 종목들의 데이터 존재 여부 확인
+            try:
+                available_data = (
+                    pl.scan_parquet(
+                        partition_path,
+                        hive_partitioning=True,
+                        low_memory=True,
+                    )
+                    .filter(
+                        (pl.col("체결일자") == int(date_str))
+                        & (pl.col("종목코드").is_in(codes))
+                    )
+                    .select(["종목코드"])
+                    .unique()
+                    .collect()
                 )
-                .select(KEEP)
-                .filter(
-                    (pl.col("체결일자") == int(date_str))
-                    & (pl.col("종목코드").is_in(codes))
+
+                actual_codes = available_data["종목코드"].to_list()
+                print(f"[DEBUG] 파티션에서 실제 발견된 종목: {len(actual_codes)}개")
+                print(f"[DEBUG] 실제 종목코드: {actual_codes}")
+
+                missing_codes = set(codes) - set(actual_codes)
+                if missing_codes:
+                    print(f"[WARNING] 파티션에 없는 종목들: {missing_codes}")
+
+            except Exception as e:
+                print(f"[ERROR] 파티션 데이터 확인 중 오류: {e}")
+
+            # OHLCV 변환 실행
+            try:
+                result_df = (
+                    pl.scan_parquet(
+                        partition_path,
+                        hive_partitioning=True,
+                        low_memory=True,
+                    )
+                    .select(KEEP)
+                    .filter(
+                        (pl.col("체결일자") == int(date_str))
+                        & (pl.col("종목코드").is_in(codes))
+                    )
+                    .with_columns(
+                        pl.datetime(
+                            (pl.col("체결일자") // 10_000),
+                            ((pl.col("체결일자") // 100) % 100).cast(pl.UInt8),
+                            (pl.col("체결일자") % 100).cast(pl.UInt8),
+                            (pl.col("체결시각") // 10_000_000).cast(pl.UInt8),
+                            ((pl.col("체결시각") // 100_000) % 100).cast(pl.UInt8),
+                            ((pl.col("체결시각") // 1_000) % 100).cast(pl.UInt8),
+                            (pl.col("체결시각") % 1_000) * 1_000,
+                            time_zone=TZ,
+                        ).alias("ts")
+                    )
+                    .drop(["체결일자", "체결시각"])
+                    .sort("ts")
+                    .collect()  # 먼저 collect하여 중간 결과 확인
                 )
-                .with_columns(
-                    pl.datetime(
-                        (pl.col("체결일자") // 10_000),
-                        ((pl.col("체결일자") // 100) % 100).cast(pl.UInt8),
-                        (pl.col("체결일자") % 100).cast(pl.UInt8),
-                        (pl.col("체결시각") // 10_000_000).cast(pl.UInt8),
-                        ((pl.col("체결시각") // 100_000) % 100).cast(pl.UInt8),
-                        ((pl.col("체결시각") // 1_000) % 100).cast(pl.UInt8),
-                        (pl.col("체결시각") % 1_000) * 1_000,
-                        time_zone=TZ,
-                    ).alias("ts")
+
+                print(f"[DEBUG] 필터링 후 데이터 건수: {len(result_df)}")
+                print(
+                    f"[DEBUG] 필터링 후 종목 수: {result_df.select('종목코드').n_unique()}"
                 )
-                .drop(["체결일자", "체결시각"])
-                .sort("ts")
-                .group_by_dynamic(
-                    index_column="ts",
-                    every="1m",
-                    by="종목코드",
-                    closed="left",
+
+                if len(result_df) == 0:
+                    print(
+                        f"[WARNING] {date_str}: 필터링 후 데이터가 없어 OHLCV 파일을 생성하지 않습니다."
+                    )
+                    continue
+
+                # OHLCV 집계
+                ohlcv_df = (
+                    result_df.lazy()
+                    .group_by_dynamic(
+                        index_column="ts",
+                        every="1m",
+                        by="종목코드",
+                        closed="left",
+                    )
+                    .agg(
+                        open=pl.col("체결가격").first(),
+                        high=pl.col("체결가격").max(),
+                        low=pl.col("체결가격").min(),
+                        close=pl.col("체결가격").last(),
+                        volume=pl.col("체결수량").sum(),
+                    )
+                    .collect()
                 )
-                .agg(
-                    open=pl.col("체결가격").first(),
-                    high=pl.col("체결가격").max(),
-                    low=pl.col("체결가격").min(),
-                    close=pl.col("체결가격").last(),
-                    volume=pl.col("체결수량").sum(),
+
+                print(f"[DEBUG] OHLCV 집계 후 데이터 건수: {len(ohlcv_df)}")
+                print(
+                    f"[DEBUG] OHLCV 집계 후 종목 수: {ohlcv_df.select('종목코드').n_unique()}"
                 )
-                .sink_parquet(out, compression="zstd", row_group_size=50_000)
-            )
-            print(f"[DEBUG] {date_str}: OHLCV 변환 완료 → {out}")
-            out_paths.append(str(out))
+
+                # 파일 저장
+                ohlcv_df.write_parquet(out, compression="zstd")
+                print(f"[DEBUG] {date_str}: OHLCV 변환 완료 → {out}")
+                out_paths.append(str(out))
+
+            except Exception as e:
+                print(f"[ERROR] {date_str}: OHLCV 변환 중 오류 발생: {e}")
+                continue
 
         print(f"[DEBUG] 변환 완료. 생성된 파일 수: {len(out_paths)}")
         return out_paths
