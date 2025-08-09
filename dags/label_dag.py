@@ -34,6 +34,51 @@ def to_min(dt):
     return dt.replace(second=0, microsecond=0)
 
 
+import zoneinfo
+from datetime import datetime
+
+import polars as pl
+
+
+def build_price_map_with_ffill(ohlcv: pl.DataFrame, date_int: int) -> dict:
+    """
+    해당 날짜(09:00~15:30, 1분 간격)의 모든 분 타임스탬프를 만들고,
+    종목별로 close를 forward fill하여 (code, ts) -> close 맵을 만든다.
+    """
+    tz = zoneinfo.ZoneInfo(TZ)
+
+    # 1) 날짜 범위 (09:00 ~ 15:30, inclusive) 분단위 인덱스 생성
+    d = datetime.strptime(str(date_int), "%Y%m%d")
+    start = d.replace(hour=9, minute=0, second=0, microsecond=0, tzinfo=tz)
+    end = d.replace(hour=15, minute=30, second=0, microsecond=0, tzinfo=tz)
+
+    ts_idx = pl.datetime_range(
+        start, end, interval="1m", time_unit="us", time_zone=TZ, eager=True
+    )
+    idx_df = pl.DataFrame({"ts": ts_idx})
+
+    # 2) ts를 TZ-aware로 맞추기 (parquet이 naive면 timezone 부여)
+    ohlcv = ohlcv.with_columns(pl.col("ts").dt.replace_time_zone(TZ))
+
+    # 3) 종목코드 × 모든 분단위 ts 생성(크로스 조인) 후 원본과 left join
+    codes = ohlcv.select("code").unique()
+    full_grid = codes.join(idx_df, how="cross")
+
+    df = (
+        full_grid.join(ohlcv, on=["code", "ts"], how="left")
+        .sort(["code", "ts"])
+        .with_columns(pl.col("close").forward_fill().alias("close"))
+    )
+
+    # 4) dict로 변환 (None 걸러내기)
+    price_map = {
+        (row["code"], row["ts"]): row["close"]
+        for row in df.iter_rows(named=True)
+        if row["close"] is not None
+    }
+    return price_map
+
+
 @dag(
     start_date=datetime(2025, 7, 4),
     schedule="@once",  # 필요에 따라 cron 으로 변경
@@ -133,14 +178,7 @@ def event_reaction_returns_dag():
                         kospi_pq_path, columns=["ts", "종목코드", "close"]
                     ).rename({"종목코드": "code"})
 
-                    # 가격 맵 생성
-                    price_map = {
-                        (
-                            row["code"],
-                            row["ts"].replace(tzinfo=zoneinfo.ZoneInfo(TZ)),
-                        ): row["close"]
-                        for row in ohlcv.iter_rows(named=True)
-                    }
+                    price_map = build_price_map_with_ffill(ohlcv, date_int)
 
                     # KOSPI 이벤트들의 수익률 계산
                     updates.extend(
@@ -155,14 +193,7 @@ def event_reaction_returns_dag():
                         kosdaq_pq_path, columns=["ts", "종목코드", "close"]
                     ).rename({"종목코드": "code"})
 
-                    # 가격 맵 생성
-                    price_map = {
-                        (
-                            row["code"],
-                            row["ts"].replace(tzinfo=zoneinfo.ZoneInfo(TZ)),
-                        ): row["close"]
-                        for row in ohlcv.iter_rows(named=True)
-                    }
+                    price_map = build_price_map_with_ffill(ohlcv, date_int)
 
                     # KOSDAQ 이벤트들의 수익률 계산
                     updates.extend(
