@@ -83,12 +83,8 @@ def parquet_to_ohlcv_dag():
 
     # partition에서 얻은 target_dates만 공시 조회에 사용
     @task
-    def build_disclosure_universe(
-        target_dates: list[str], market: str
-    ) -> dict[str, list[str]]:
-        print(
-            f"[DEBUG] Universe 구축 시작 — market={market}, target_dates={len(target_dates)}개"
-        )
+    def build_disclosure_universe(target_dates: list[str]) -> dict[str, list[str]]:
+        print(f"[DEBUG] Universe 구축 시작 — target_dates={len(target_dates)}개")
         if not target_dates:
             print("[DEBUG] target_dates 비어있음 → 빈 universe 반환")
             return {}
@@ -112,7 +108,6 @@ def parquet_to_ohlcv_dag():
               stock_code
             FROM disclosure_events
             WHERE stock_code IS NOT NULL
-              AND market = :market
               AND to_char((disclosed_at AT TIME ZONE 'Asia/Seoul')::date, 'YYYYMMDD') IN :target_dates
               AND (
                   (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 9 AND 14)
@@ -124,7 +119,6 @@ def parquet_to_ohlcv_dag():
         ).bindparams(sa.bindparam("target_dates", expanding=True))
 
         params = {
-            "market": market,
             "target_dates": target_dates,
         }
 
@@ -308,7 +302,6 @@ def parquet_to_ohlcv_dag():
     # 수집한 target_dates만으로 공시 Universe 생성
     universes = build_disclosure_universe.expand(
         target_dates=target_dates_list,
-        market=markets,
     )
 
     # roots(KOSPI/KOSDAQ)와 universes를 1:1 zip 매핑
