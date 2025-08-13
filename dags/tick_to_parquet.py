@@ -37,7 +37,7 @@ def tick_to_parquet_dag():
             for p in KOSDAQ_RAW_DIR.iterdir()
             if p.suffix == ".dat" and patt.search(p.name)
         ]
-        return kosdaq
+        return kospi + kosdaq
 
     # ② CSV → 날짜별 Parquet 파티션
     @task
@@ -76,8 +76,15 @@ def tick_to_parquet_dag():
     convert.expand(
         file_path=get_files(
             year_month_list=[
-                "2023_10",
-                "2023_11",
+                "2023_01",
+                "2023_02",
+                "2023_03",
+                "2023_04",
+                "2023_05",
+                "2023_06",
+                "2023_07",
+                "2023_08",
+                "2023_09",
             ]
         )
     )

@@ -366,6 +366,8 @@ services:
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
       - "5050:80"
+    volumes:
+      - ./servers.json:/pgadmin4/servers.json
     depends_on:
       postgres_events:
         condition: service_healthy
