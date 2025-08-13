@@ -16,4 +16,13 @@
         "--profile",
         "black"
     ],
+    "files.autoGuessEncoding": false,
+    "files.associations": {
+        "*.xml": "plaintext",
+        "*.txt": "plaintext"
+    },
+    "[plaintext]": {
+        "files.encoding": "euc-kr"
+    }
+        
 }
