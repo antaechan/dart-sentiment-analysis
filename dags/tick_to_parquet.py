@@ -9,8 +9,14 @@ import polars as pl
 from airflow.decorators import dag, task
 from polars import PartitionByKey, col
 
-from config import (COLS, KEEP, KOSDAQ_PARTITION_DIR, KOSDAQ_RAW_DIR,
-                    KOSPI_PARTITION_DIR, KOSPI_RAW_DIR)
+from config import (
+    COLS,
+    KEEP,
+    KOSDAQ_PARTITION_DIR,
+    KOSDAQ_RAW_DIR,
+    KOSPI_PARTITION_DIR,
+    KOSPI_RAW_DIR,
+)
 
 
 # ─────────────────────── DAG 정의 ───────────────────────
@@ -52,6 +58,7 @@ def tick_to_parquet_dag():
                 p,
                 separator="|",
                 has_header=False,
+                cache=False,
                 new_columns=COLS,
                 low_memory=True,
                 infer_schema_length=100,
@@ -76,7 +83,12 @@ def tick_to_parquet_dag():
     convert.expand(
         file_path=get_files(
             year_month_list=[
-                "2023_01",
+                "2022_07",
+                "2022_08",
+                "2022_09",
+                "2022_10",
+                "2022_11",
+                "2022_12",
                 "2023_02",
                 "2023_03",
                 "2023_04",
