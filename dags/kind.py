@@ -44,6 +44,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
+import re
+from selenium.webdriver.common.by import By
+
+_DOCNO_RE = re.compile(r"openDisclsViewer\('([^']+)'")
+_CO_RE = re.compile(r"companysummary_open\('([^']+)'\)")
 
 # ---------------------- 설정값 ----------------------
 DEFAULT_URL = os.environ.get(
@@ -161,42 +166,73 @@ def _map_header_indices(driver: webdriver.Chrome) -> Dict[str, int]:
 
 
 def _extract_rows(driver: webdriver.Chrome, header_map: Dict[str, int]) -> List[dict]:
-    rows = driver.find_elements(By.XPATH, "(//table)[1]//tbody//tr[td or th]")
+    """
+    KIND 상세검색 결과 테이블(번호/시간/회사/제목/부서/버튼 6열)에 특화.
+    헤더가 없거나 변해도 '열 인덱스'로 안전하게 파싱.
+    """
+    rows = driver.find_elements(By.XPATH, "//tbody/tr[td]")  # 결과 테이블의 본문 행들
     results: List[dict] = []
-
-    fb_time = header_map.get("발표시간", 0)
-    fb_company = header_map.get("회사명", 1)
-    fb_title = header_map.get("제목", 2)
 
     for r in rows:
         try:
-            tds = r.find_elements(By.XPATH, ".//td | .//th")
-            if not tds:
+            tds = r.find_elements(By.TAG_NAME, "td")
+            if len(tds) < 4:
                 continue
-            time_txt = tds[fb_time].text.strip() if fb_time < len(tds) else ""
-            company_txt = tds[fb_company].text.strip() if fb_company < len(tds) else ""
-            title_cell = tds[fb_title] if fb_title < len(tds) else None
-            title_txt = title_cell.text.strip() if title_cell else ""
 
-            link = ""
+            # 1) 발표 시간 (td[1])
+            announced_at = (tds[1].text or "").strip()
+
+            # 2) 회사명 & 회사코드 (td[2])
+            company_txt = ""
+            company_code = ""
             try:
-                a = title_cell.find_element(By.XPATH, ".//a") if title_cell else None
-                if a:
-                    link = a.get_attribute("href") or ""
+                a_company = tds[2].find_element(By.XPATH, ".//a[@id='companysum']")
+                company_txt = (
+                    a_company.get_attribute("title") or a_company.text or ""
+                ).strip()
+                onclick_company = a_company.get_attribute("onclick") or ""
+                mco = _CO_RE.search(onclick_company)
+                if mco:
+                    company_code = mco.group(1)  # 예: '10167'
             except Exception:
-                link = ""
+                # a태그가 없으면 그냥 텍스트 사용 (아이콘 제거 위해 strip)
+                company_txt = (tds[2].text or "").strip()
 
-            if any([time_txt, company_txt, title_txt]):
+            # 3) 공시 제목 & 문서번호 (td[3])
+            title_txt = ""
+            disclosure_id = ""
+            detail_url = ""
+            try:
+                a_title = tds[3].find_element(
+                    By.XPATH, ".//a[contains(@onclick,'openDisclsViewer')]"
+                )
+                # [정정] 같은 태그가 섞여 있을 수 있어 title 속성 우선
+                title_txt = (
+                    a_title.get_attribute("title") or a_title.text or ""
+                ).strip()
+                onclick_title = a_title.get_attribute("onclick") or ""
+                mdoc = _DOCNO_RE.search(onclick_title)
+                if mdoc:
+                    disclosure_id = mdoc.group(1)
+                    detail_url = f"https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno={disclosure_id}&docno=&viewerhost=&viewerport="
+            except Exception:
+                title_txt = (tds[3].text or "").strip()
+
+            # 값이 하나라도 있으면 적재
+            if any([announced_at, company_txt, title_txt]):
                 results.append(
                     {
-                        "announced_at": time_txt,
+                        "announced_at": announced_at,
                         "company": company_txt,
+                        "company_code": company_code,  # 새 필드(옵션)
                         "title": title_txt,
-                        "detail_url": link,
+                        "disclosure_id": disclosure_id,  # 새 필드(옵션)
+                        "detail_url": detail_url,  # 필요시 조합해 사용
                     }
                 )
         except Exception:
             continue
+
     return results
 
 
@@ -273,7 +309,15 @@ def _crawl_kind_to_csv(
         outfile = os.path.join(out_dir, f"kind_disclosures_{ts}.csv")
         with open(outfile, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(
-                f, fieldnames=["announced_at", "company", "title", "detail_url"]
+                f,
+                fieldnames=[
+                    "announced_at",
+                    "company",
+                    "company_code",
+                    "title",
+                    "disclosure_id",
+                    "detail_url",
+                ],
             )
             writer.writeheader()
             for r in all_rows:
