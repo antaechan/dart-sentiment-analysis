@@ -17,6 +17,12 @@ Airflow DAG (TaskFlow API): Chrome(Selenium)으로 KIND 상세검색 페이지�
   OUTPUT_DIR      : 기본값 '/opt/airflow/dags/data'
   HEADLESS        : 'true'/'false' (기본 true)
   MAX_PAGES       : 최대 페이지 크롤 수 (기본 5)
+
+ARM64 (Apple Silicon/M1) 호환성 주의사항:
+- Docker 환경에서 실행 시 ARM64 호환 이미지 사용 필요
+- 예: --platform linux/amd64 또는 ARM64 네이티브 이미지
+- webdriver-manager가 자동으로 적절한 드라이버 다운로드
+- 컨테이너에 Chrome/Chromium 설치 필요
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
 
 # ---------------------- 설정값 ----------------------
 DEFAULT_URL = os.environ.get(
@@ -46,6 +53,11 @@ DEFAULT_URL = os.environ.get(
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/opt/airflow/dags/data")
 HEADLESS = os.environ.get("HEADLESS", "true").lower() != "false"
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "5"))
+
+# Timeout configurations
+PAGE_LOAD_TIMEOUT = int(os.environ.get("PAGE_LOAD_TIMEOUT", "60"))
+IMPLICIT_WAIT = int(os.environ.get("IMPLICIT_WAIT", "2"))
+WEBDRIVER_TIMEOUT = int(os.environ.get("WEBDRIVER_TIMEOUT", "30"))
 
 # ---------------------- Selenium 도우미 ----------------------
 
@@ -59,16 +71,12 @@ def _setup_driver() -> webdriver.Chrome:
     opts.add_argument("--disable-gpu")
     opts.add_argument("--window-size=1366,900")
     opts.add_argument("--lang=ko-KR")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
-    prefs = {
-        "profile.default_content_setting_values.automatic_downloads": 1,
-        "download.prompt_for_download": False,
-    }
-    opts.add_experimental_option("prefs", prefs)
 
-    driver = webdriver.Chrome(ChromeDriverManager().install(), options=opts)
-    driver.set_page_load_timeout(60)
-    driver.implicitly_wait(2)
+    # 시스템에 설치된 ARM64 드라이버로 직접 실행
+    service = Service(os.getenv("CHROMEDRIVER", "/usr/bin/chromedriver"))
+    driver = webdriver.Chrome(service=service, options=opts)
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+    driver.implicitly_wait(IMPLICIT_WAIT)
     return driver
 
 
@@ -294,11 +302,22 @@ local_tz = pendulum.timezone("Asia/Seoul")
     tags=["KIND", "selenium", "disclosure"],
 )
 def kind_disclosure_crawl_dag():
-    @task(retries=1, retry_delay=pendulum.duration(minutes=2))
+    @task()
     def crawl_to_csv() -> str:
-        outfile = _crawl_kind_to_csv()
-        print(f"CSV saved to: {outfile}")
-        return outfile
+        try:
+            logging.info("Starting KIND disclosure crawling...")
+            logging.info(f"Target URL: {DEFAULT_URL}")
+            logging.info(f"Output directory: {OUTPUT_DIR}")
+            logging.info(f"Headless mode: {HEADLESS}")
+            logging.info(f"Max pages: {MAX_PAGES}")
+
+            outfile = _crawl_kind_to_csv()
+            logging.info(f"CSV saved successfully to: {outfile}")
+            print(f"CSV saved to: {outfile}")
+            return outfile
+        except Exception as e:
+            logging.error(f"Failed to crawl KIND disclosures: {str(e)}")
+            raise e
 
     crawl_to_csv()
 
