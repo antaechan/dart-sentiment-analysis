@@ -93,7 +93,7 @@ def _click_search(driver: webdriver.Chrome):
     ]
     for xp in search_xpaths:
         try:
-            btn = WebDriverWait(driver, 5).until(
+            btn = WebDriverWait(driver, 2).until(
                 EC.element_to_be_clickable((By.XPATH, xp))
             )
             btn.click()
@@ -103,7 +103,7 @@ def _click_search(driver: webdriver.Chrome):
 
 
 def _wait_results_table(driver: webdriver.Chrome):
-    table_like = WebDriverWait(driver, 20).until(
+    table_like = WebDriverWait(driver, 2).until(
         EC.presence_of_element_located(
             (
                 By.XPATH,
@@ -202,7 +202,7 @@ def _click_next_page(driver: webdriver.Chrome) -> bool:
         driver.execute_script("arguments[0].click();", next_btn)
 
         # 페이지 내용이 바뀔 때까지 대기
-        WebDriverWait(driver, 10).until(lambda d: d.page_source != before_html)
+        WebDriverWait(driver, 1).until(lambda d: d.page_source != before_html)
         return True
     except Exception:
         return False
