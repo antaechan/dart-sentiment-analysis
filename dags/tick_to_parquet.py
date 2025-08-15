@@ -8,6 +8,7 @@ from pathlib import Path
 import polars as pl
 from airflow.decorators import dag, task
 from polars import PartitionByKey, col
+from datetime import timedelta
 
 from config import (
     COLS,
@@ -46,7 +47,7 @@ def tick_to_parquet_dag():
         return kospi + kosdaq
 
     # ② CSV → 날짜별 Parquet 파티션
-    @task
+    @task(execution_timeout=timedelta(hours=1))
     def convert(file_path: str) -> str:
         p = Path(file_path)
         out_dir = KOSPI_PARTITION_DIR if "KOSPI" in p.parts else KOSDAQ_PARTITION_DIR
@@ -89,6 +90,7 @@ def tick_to_parquet_dag():
                 "2022_10",
                 "2022_11",
                 "2022_12",
+                "2023_01",
                 "2023_02",
                 "2023_03",
                 "2023_04",
