@@ -85,23 +85,6 @@ def _setup_driver() -> webdriver.Chrome:
     return driver
 
 
-def _close_possible_popups(driver: webdriver.Chrome):
-    candidates = [
-        (By.XPATH, "//button[contains(., '닫기')]"),
-        (By.XPATH, "//a[contains(., '닫기')]"),
-        (By.XPATH, "//div[contains(@class,'popup')]//button[contains(.,'닫기')]"),
-    ]
-    for by, sel in candidates:
-        try:
-            elems = driver.find_elements(by, sel)
-            for e in elems:
-                if e.is_displayed():
-                    e.click()
-                    time.sleep(0.5)
-        except Exception:
-            pass
-
-
 def _click_search(driver: webdriver.Chrome):
     search_xpaths = [
         "//button[contains(., '검색')]",
@@ -131,46 +114,15 @@ def _wait_results_table(driver: webdriver.Chrome):
     return table_like
 
 
-def _normalize_header(t: str) -> str:
-    t = (t or "").strip()
-    t = t.replace("\n", " ")
-    t = t.replace("  ", " ")
-    return t
-
-
-HEADER_ALIASES = {
-    "발표시간": {"공시제출일시", "접수일시", "공시일시", "제출일시"},
-    "회사명": {"법인명", "제출인명", "법인/제출인", "회사명"},
-    "제목": {"보고서명", "공시제목", "제목"},
-}
-
-
-def _map_header_indices(driver: webdriver.Chrome) -> Dict[str, int]:
-    header_cells: List[str] = []
-    try:
-        ths = driver.find_elements(By.XPATH, "//table//thead//th")
-        if not ths:
-            ths = driver.find_elements(
-                By.XPATH, "(//table)[1]//tr[1]//th | (//table)[1]//tr[1]//td"
-            )
-        header_cells = [_normalize_header(th.text) for th in ths]
-    except Exception:
-        header_cells = []
-
-    header_map: Dict[str, int] = {}
-    for idx, h in enumerate(header_cells):
-        for key, alias_set in HEADER_ALIASES.items():
-            if h in alias_set or any(a in h for a in alias_set):
-                header_map[key] = idx
-    return header_map
-
-
-def _extract_rows(driver: webdriver.Chrome, header_map: Dict[str, int]) -> List[dict]:
+def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
     """
     KIND 상세검색 결과 테이블(번호/시간/회사/제목/부서/버튼 6열)에 특화.
     헤더가 없거나 변해도 '열 인덱스'로 안전하게 파싱.
     """
-    rows = driver.find_elements(By.XPATH, "//tbody/tr[td]")  # 결과 테이블의 본문 행들
+    rows = driver.find_elements(By.CSS_SELECTOR, "table.list.type-00.mt10 > tbody > tr")
+
+    logging.info(len(rows))
+
     results: List[dict] = []
 
     for r in rows:
@@ -237,23 +189,23 @@ def _extract_rows(driver: webdriver.Chrome, header_map: Dict[str, int]) -> List[
 
 
 def _click_next_page(driver: webdriver.Chrome) -> bool:
-    candidates = [
-        "//a[contains(., '다음') and not(contains(@class,'disabled'))]",
-        "//button[contains(., '다음') and not(@disabled)]",
-        "//a[@aria-label='다음']",
-        "//a[contains(@class,'next') and not(contains(@class,'disabled'))]",
-        "//button[contains(@class,'next') and not(@disabled)]",
-    ]
-    for xp in candidates:
-        try:
-            next_btn = driver.find_element(By.XPATH, xp)
-            if next_btn and next_btn.is_displayed():
-                driver.execute_script("arguments[0].click();", next_btn)
-                time.sleep(1.2)
-                return True
-        except Exception:
-            continue
-    return False
+    """페이징 영역의 '다음 페이지' 링크를 클릭."""
+    try:
+        next_btn = driver.find_element(By.CSS_SELECTOR, "div.paging a.next")
+        if not next_btn.is_displayed():
+            return False
+
+        before_html = driver.page_source  # 페이지 전환 감지용
+        driver.execute_script(
+            "arguments[0].scrollIntoView({block:'center'});", next_btn
+        )
+        driver.execute_script("arguments[0].click();", next_btn)
+
+        # 페이지 내용이 바뀔 때까지 대기
+        WebDriverWait(driver, 10).until(lambda d: d.page_source != before_html)
+        return True
+    except Exception:
+        return False
 
 
 def _crawl_kind_to_csv(
@@ -273,7 +225,6 @@ def _crawl_kind_to_csv(
         logging.info(f"Open: {url}")
         driver.get(url)
         time.sleep(1.2)
-        _close_possible_popups(driver)
 
         if not driver.title or "상세검색" not in driver.page_source:
             try:
@@ -292,14 +243,18 @@ def _crawl_kind_to_csv(
 
         _click_search(driver)
         _wait_results_table(driver)
-        header_map = _map_header_indices(driver)
 
         page_count = 0
         while True:
             _wait_results_table(driver)
-            rows = _extract_rows(driver, header_map)
+            rows = _extract_rows(driver)
             all_rows.extend(rows)
             page_count += 1
+
+            logging.info(
+                f"Page {page_count}: Extracted {len(rows)} rows (Total: {len(all_rows)} rows)"
+            )
+
             if page_count >= pages:
                 break
             if not _click_next_page(driver):
