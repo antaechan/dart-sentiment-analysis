@@ -133,27 +133,73 @@ def set_date_by_typing(driver, start_date: str, end_date: str):
     WebDriverWait(driver, 5).until(_ok)
 
 
-def set_search_type(driver: webdriver.Chrome):
-    # 유형 탭 클릭
-    tab = WebDriverWait(driver, 2).until(
-        EC.element_to_be_clickable((By.ID, "dsclsType01"))
-    )
-    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", tab)
-    tab.click()
-
-    # 레이어/체크박스가 클릭 가능할 때까지 대기
-    chk = WebDriverWait(driver, 2).until(
-        EC.element_to_be_clickable((By.ID, "dsclsLayer01_all"))
-    )
-    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", chk)
-
-    # 체크 상태 보장
-    if not chk.is_selected():
-        chk.click()
-        # 선택 반영 확인
-        WebDriverWait(driver, 5).until(
-            lambda d: d.find_element(By.ID, "dsclsLayer01_all").is_selected()
+def set_search_type(driver, type_codes=("01",), select_all=True):
+    """
+    공시유형을 JS로 직접 세팅.
+    - type_codes: 문자열 코드 리스트. 예: ("01","02","05",...)
+    - select_all: 각 탭에서 '전체선택' 체크할지 여부
+    """
+    # 0) '공시유형 초기화' 체크 해제 (기본 체크되어 있으면 검색 때 초기화됨)
+    try:
+        driver.execute_script(
+            """
+            var b = document.getElementById('bfrDsclsType');
+            if (b && b.checked) { b.click(); }
+        """
         )
+    except Exception:
+        pass
+
+    for code in type_codes:
+        # 1) 탭 열기 (사이트 내장 함수 호출)
+        driver.execute_script(
+            """
+            if (typeof fnDisclosureType === 'function') { fnDisclosureType(arguments[0]); }
+        """,
+            code,
+        )
+
+        # 2) 레이어가 열렸는지 대기
+        layer_id = f"dsclsLayer{code}"
+        try:
+            WebDriverWait(driver).until(
+                lambda d: d.execute_script(
+                    "var el=document.getElementById(arguments[0]);"
+                    "return el && (el.style.display==='' || el.style.display==='block');",
+                    layer_id,
+                )
+            )
+        except Exception:
+            # 레이어 없는 유형도 존재할 수 있으니 스킵
+            continue
+
+        if select_all:
+            # 3) '전체선택' 체크 + 사이트 함수 호출
+            driver.execute_script(
+                """
+                var all = document.getElementById('dsclsLayer'+arguments[0]+'_all');
+                if (all && !all.checked) { all.checked = true; }
+                if (typeof fnCheckAllDscls === 'function') { fnCheckAllDscls(arguments[0]); }
+            """,
+                code,
+            )
+
+            # 4) 체크가 실제 반영됐는지 검증 (체크된 항목 수 > 0)
+            try:
+                WebDriverWait(driver).until(
+                    lambda d: d.execute_script(
+                        """
+                        var layer = document.getElementById('dsclsLayer'+arguments[0]);
+                        if(!layer) return false;
+                        var qs = layer.querySelectorAll("input[type=checkbox][name^='disclosureTypeArr']:checked");
+                        return qs && qs.length > 0;
+                    """,
+                        code,
+                    )
+                )
+            except Exception:
+                # 일부 유형은 세부 항목이 없을 수도 있음 → 경고만
+                pass
 
 
 def _click_search(driver: webdriver.Chrome):
@@ -328,9 +374,9 @@ def _crawl_kind_to_csv(
         set_date_by_typing(driver, start_date, end_date)
         logging.info(f"Date range set: {start_date} ~ {end_date}")
 
-        # logging.info("Setting search type...")
-        # set_search_type(driver)
-        # logging.info("Search type configured")
+        logging.info("Setting search type...")
+        set_search_type(driver, type_codes=("01",), select_all=True)
+        logging.info("Search type configured")
 
         logging.info("Clicking search button...")
         _click_search(driver)
