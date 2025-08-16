@@ -46,6 +46,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 import re
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import StaleElementReferenceException
+from selenium.webdriver.common.keys import Keys
 
 _DOCNO_RE = re.compile(r"openDisclsViewer\('([^']+)'")
 _CO_RE = re.compile(r"companysummary_open\('([^']+)'\)")
@@ -85,25 +87,105 @@ def _setup_driver() -> webdriver.Chrome:
     return driver
 
 
+def set_date_by_typing(driver, start_date: str, end_date: str):
+    """상세검색 폼의 기간 입력칸(#fromDate, #toDate)에 값 설정 후 안정화 대기."""
+    if not (start_date or end_date):
+        return
+
+    sd = start_date
+    ed = end_date
+
+    # 입력칸 존재 대기
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "fromDate")))
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "toDate")))
+
+    # 달력 위젯/마스크가 걸려 있어도 확실히 반영되도록 JS로 value 세팅 + 이벤트 발생
+    js = r"""
+    const sd = arguments[0]; const ed = arguments[1];
+    const fd = document.getElementById('fromDate');
+    const td = document.getElementById('toDate');
+
+    function setVal(el, val){
+      if (!el) return;
+      el.focus();
+      el.value = val || '';
+      // jQuery/원시 모두 대응: input/change 이벤트 발생시켜 내부 검증/바인딩 태우기
+      const ev1 = new Event('input', { bubbles: true });
+      const ev2 = new Event('change', { bubbles: true });
+      el.dispatchEvent(ev1); el.dispatchEvent(ev2);
+    }
+
+    setVal(fd, sd);
+    setVal(td, ed);
+
+    // KIND 쪽에서 쓰는 검증/마스크 함수가 있으면 시도 (없어도 무해)
+    try { if (sd) chkDate('document.searchForm.fromDate'); } catch(e) {}
+    try { if (ed) chkDate('document.searchForm.toDate'); } catch(e) {}
+    """
+    driver.execute_script(js, sd, ed)
+
+    # 값 반영 확인(명시적 확인)
+    def _ok(drv):
+        v1 = drv.find_element(By.ID, "fromDate").get_attribute("value")
+        v2 = drv.find_element(By.ID, "toDate").get_attribute("value")
+        return (sd == "" or v1 == sd) and (ed == "" or v2 == ed)
+
+    WebDriverWait(driver, 5).until(_ok)
+
+
+def set_search_type(driver: webdriver.Chrome):
+    # 유형 탭 클릭
+    tab = WebDriverWait(driver, 2).until(
+        EC.element_to_be_clickable((By.ID, "dsclsType01"))
+    )
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", tab)
+    tab.click()
+
+    # 레이어/체크박스가 클릭 가능할 때까지 대기
+    chk = WebDriverWait(driver, 2).until(
+        EC.element_to_be_clickable((By.ID, "dsclsLayer01_all"))
+    )
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", chk)
+
+    # 체크 상태 보장
+    if not chk.is_selected():
+        chk.click()
+        # 선택 반영 확인
+        WebDriverWait(driver, 5).until(
+            lambda d: d.find_element(By.ID, "dsclsLayer01_all").is_selected()
+        )
+
+
 def _click_search(driver: webdriver.Chrome):
-    search_xpaths = [
-        "//button[contains(., '검색')]",
-        "//a[contains(., '검색')]",
-        "//input[@type='button' and contains(@value,'검색')]",
-    ]
-    for xp in search_xpaths:
-        try:
-            btn = WebDriverWait(driver, 2).until(
-                EC.element_to_be_clickable((By.XPATH, xp))
-            )
-            btn.click()
-            return
-        except Exception:
-            continue
+    logging.info("Looking for search button...")
+    search_btn = driver.find_element(By.CSS_SELECTOR, "a.search-btn[title='검색']")
+    logging.info(
+        f"Search button found: {search_btn.tag_name}, text: '{search_btn.text}', enabled: {search_btn.is_enabled()}"
+    )
+
+    # 클릭 전 상태 확인
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", search_btn)
+    WebDriverWait(driver, 5).until(
+        EC.element_to_be_clickable((By.CSS_SELECTOR, "a.search-btn[title='검색']"))
+    )
+
+    logging.info("Clicking search button...")
+    try:
+        search_btn.click()
+        logging.info("Search button clicked successfully")
+    except Exception as e:
+        logging.warning(f"Regular click failed: {e}, trying JavaScript click...")
+        driver.execute_script("arguments[0].click();", search_btn)
+        logging.info("JavaScript click executed")
+
+    # 클릭 후 페이지 변화 확인
+    time.sleep(1)
+    current_url = driver.current_url
+    logging.info(f"Current URL after click: {current_url}")
 
 
 def _wait_results_table(driver: webdriver.Chrome):
-    table_like = WebDriverWait(driver, 2).until(
+    table_like = WebDriverWait(driver, 5).until(
         EC.presence_of_element_located(
             (
                 By.XPATH,
@@ -114,78 +196,82 @@ def _wait_results_table(driver: webdriver.Chrome):
     return table_like
 
 
+def _safe_text(el):
+    try:
+        return (el.text or "").strip()
+    except Exception:
+        return ""
+
+
 def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
-    """
-    KIND 상세검색 결과 테이블(번호/시간/회사/제목/부서/버튼 6열)에 특화.
-    헤더가 없거나 변해도 '열 인덱스'로 안전하게 파싱.
-    """
-    rows = driver.find_elements(By.CSS_SELECTOR, "table.list.type-00.mt10 > tbody > tr")
+    rows_sel = "table.list.type-00.mt10 > tbody > tr"
+    out = []
+    rows = driver.find_elements(By.CSS_SELECTOR, rows_sel)
+    n = len(rows)
 
-    logging.info(len(rows))
-
-    results: List[dict] = []
-
-    for r in rows:
-        try:
-            tds = r.find_elements(By.TAG_NAME, "td")
-            if len(tds) < 4:
-                continue
-
-            # 1) 발표 시간 (td[1])
-            announced_at = (tds[1].text or "").strip()
-
-            # 2) 회사명 & 회사코드 (td[2])
-            company_txt = ""
-            company_code = ""
+    for i in range(n):  # 0..n-1
+        for attempt in range(3):  # stale이면 최대 3회 재시도
             try:
-                a_company = tds[2].find_element(By.XPATH, ".//a[@id='companysum']")
-                company_txt = (
-                    a_company.get_attribute("title") or a_company.text or ""
-                ).strip()
-                onclick_company = a_company.get_attribute("onclick") or ""
-                mco = _CO_RE.search(onclick_company)
-                if mco:
-                    company_code = mco.group(1)  # 예: '10167'
-            except Exception:
-                # a태그가 없으면 그냥 텍스트 사용 (아이콘 제거 위해 strip)
-                company_txt = (tds[2].text or "").strip()
-
-            # 3) 공시 제목 & 문서번호 (td[3])
-            title_txt = ""
-            disclosure_id = ""
-            detail_url = ""
-            try:
-                a_title = tds[3].find_element(
-                    By.XPATH, ".//a[contains(@onclick,'openDisclsViewer')]"
+                row = driver.find_element(
+                    By.CSS_SELECTOR, f"{rows_sel}:nth-child({i+1})"
                 )
-                # [정정] 같은 태그가 섞여 있을 수 있어 title 속성 우선
-                title_txt = (
-                    a_title.get_attribute("title") or a_title.text or ""
-                ).strip()
-                onclick_title = a_title.get_attribute("onclick") or ""
-                mdoc = _DOCNO_RE.search(onclick_title)
-                if mdoc:
-                    disclosure_id = mdoc.group(1)
-                    detail_url = f"https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno={disclosure_id}&docno=&viewerhost=&viewerport="
-            except Exception:
-                title_txt = (tds[3].text or "").strip()
+                tds = row.find_elements(By.CSS_SELECTOR, "td")
+                if len(tds) < 5:
+                    raise Exception("not enough tds")
 
-            # 값이 하나라도 있으면 적재
-            if any([announced_at, company_txt, title_txt]):
-                results.append(
+                announced_at = _safe_text(tds[1])
+
+                # 회사
+                try:
+                    a_company = tds[2].find_element(By.CSS_SELECTOR, "a#companysum")
+                    company_txt = a_company.get_attribute("title") or _safe_text(
+                        a_company
+                    )
+                    onclick_company = a_company.get_attribute("onclick") or ""
+                except Exception:
+                    a_company = None
+                    company_txt = _safe_text(tds[2])
+                    onclick_company = ""
+                mco = re.search(r"companysummary_open\('([^']+)'\)", onclick_company)
+                company_code = mco.group(1) if mco else ""
+
+                # 제목
+                try:
+                    a_title = tds[3].find_element(
+                        By.CSS_SELECTOR, "a[onclick*='openDisclsViewer']"
+                    )
+                    title_txt = a_title.get_attribute("title") or _safe_text(a_title)
+                    onclick_title = a_title.get_attribute("onclick") or ""
+                except Exception:
+                    a_title = None
+                    title_txt = _safe_text(tds[3])
+                    onclick_title = ""
+                mdoc = re.search(r"openDisclsViewer\('([^']+)'", onclick_title)
+                disclosure_id = mdoc.group(1) if mdoc else ""
+
+                detail_url = f"https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno={disclosure_id}&docno=&viewerhost=&viewerport="
+
+                out.append(
                     {
                         "announced_at": announced_at,
                         "company": company_txt,
-                        "company_code": company_code,  # 새 필드(옵션)
+                        "company_code": company_code,
                         "title": title_txt,
-                        "disclosure_id": disclosure_id,  # 새 필드(옵션)
-                        "detail_url": detail_url,  # 필요시 조합해 사용
+                        "disclosure_id": disclosure_id,
+                        "detail_url": detail_url,
                     }
                 )
-        except Exception:
-            continue
-
-    return results
+                break  # 성공했으면 다음 행으로
+            except StaleElementReferenceException:
+                if attempt == 2:
+                    logging.warning(f"Row {i+1}: stale after retries, skipping")
+                else:
+                    time.sleep(0.1)  # 아주 짧은 백오프 후 재시도
+                continue
+            except Exception as e:
+                logging.warning(f"Row {i+1} parse error: {e}")
+                break
+    return out
 
 
 def _click_next_page(driver: webdriver.Chrome) -> bool:
@@ -212,42 +298,57 @@ def _crawl_kind_to_csv(
     target_url: Optional[str] = None,
     output_dir: Optional[str] = None,
     max_pages: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
 ) -> str:
     url = target_url or DEFAULT_URL
     out_dir = output_dir or OUTPUT_DIR
     pages = max_pages or MAX_PAGES
 
+    logging.info(f"=== Starting KIND crawling process ===")
+    logging.info(f"Target URL: {url}")
+    logging.info(f"Output directory: {out_dir}")
+    logging.info(f"Max pages: {pages}")
+    logging.info(f"Date range: {start_date} ~ {end_date}")
+
     os.makedirs(out_dir, exist_ok=True)
+    logging.info(f"Output directory created/verified: {out_dir}")
 
     driver = _setup_driver()
+    logging.info("WebDriver initialized successfully")
+
     all_rows: List[dict] = []
     try:
-        logging.info(f"Open: {url}")
+        logging.info(f"Opening URL: {url}")
         driver.get(url)
         time.sleep(1.2)
+        logging.info("Page loaded, waiting for content to settle")
 
-        if not driver.title or "상세검색" not in driver.page_source:
-            try:
-                elem = driver.find_element(By.XPATH, "//a[contains(., '상세검색')]")
-                elem.click()
-                time.sleep(1.0)
-            except Exception:
-                try:
-                    elem2 = driver.find_element(
-                        By.XPATH, "//a[contains(., '오늘의공시')]"
-                    )
-                    elem2.click()
-                    time.sleep(1.0)
-                except Exception:
-                    pass
+        logging.info("Setting date range...")
+        set_date_by_typing(driver, start_date, end_date)
+        logging.info(f"Date range set: {start_date} ~ {end_date}")
 
+        # logging.info("Setting search type...")
+        # set_search_type(driver)
+        # logging.info("Search type configured")
+
+        logging.info("Clicking search button...")
         _click_search(driver)
+        logging.info("Search button clicked")
+
+        logging.info("Waiting for results table...")
         _wait_results_table(driver)
+        logging.info("Results table found")
 
         page_count = 0
         while True:
+            logging.info(f"--- Processing page {page_count + 1} ---")
             _wait_results_table(driver)
+            logging.info("Results table loaded for current page")
+
             rows = _extract_rows(driver)
+            logging.info(f"Extracted {len(rows)} rows from page {page_count + 1}")
+
             all_rows.extend(rows)
             page_count += 1
 
@@ -256,12 +357,24 @@ def _crawl_kind_to_csv(
             )
 
             if page_count >= pages:
+                logging.info(f"Reached max pages limit ({pages}), stopping pagination")
                 break
+
+            logging.info("Attempting to go to next page...")
             if not _click_next_page(driver):
+                logging.info("No more pages available, stopping pagination")
                 break
+            else:
+                logging.info("Successfully moved to next page")
+
+        logging.info(f"=== Crawling completed ===")
+        logging.info(f"Total pages processed: {page_count}")
+        logging.info(f"Total rows collected: {len(all_rows)}")
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         outfile = os.path.join(out_dir, f"kind_disclosures_{ts}.csv")
+        logging.info(f"Preparing to save CSV to: {outfile}")
+
         with open(outfile, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(
                 f,
@@ -278,13 +391,22 @@ def _crawl_kind_to_csv(
             for r in all_rows:
                 writer.writerow(r)
 
-        logging.info(f"Saved {len(all_rows)} rows to {outfile}")
+        logging.info(f"CSV file saved successfully: {outfile}")
+        logging.info(f"File size: {os.path.getsize(outfile)} bytes")
         return outfile
 
+    except Exception as e:
+        logging.error(f"Error during crawling process: {str(e)}")
+        logging.error(f"Current page count: {page_count}")
+        logging.error(f"Rows collected so far: {len(all_rows)}")
+        raise e
     finally:
         try:
+            logging.info("Closing WebDriver...")
             driver.quit()
-        except Exception:
+            logging.info("WebDriver closed successfully")
+        except Exception as e:
+            logging.warning(f"Error closing WebDriver: {str(e)}")
             pass
 
 
@@ -310,7 +432,10 @@ def kind_disclosure_crawl_dag():
             logging.info(f"Headless mode: {HEADLESS}")
             logging.info(f"Max pages: {MAX_PAGES}")
 
-            outfile = _crawl_kind_to_csv()
+            outfile = _crawl_kind_to_csv(
+                start_date="2021-01-01",
+                end_date="2021-06-30",
+            )
             logging.info(f"CSV saved successfully to: {outfile}")
             print(f"CSV saved to: {outfile}")
             return outfile
