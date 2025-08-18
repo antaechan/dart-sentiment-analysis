@@ -95,148 +95,31 @@ def _setup_driver() -> webdriver.Chrome:
 
 
 def set_page_size(driver):
-    """
-    페이지당 게시물 수를 100으로 설정하고 GO 버튼을 클릭한다.
-    - 대상: <select id="currentPageSize">, <a class="btn-sprite btn-go" title="GO">
-    """
-    WAIT_TIMEOUT = 10
-    TARGET_VALUE = "100"
+    wait = WebDriverWait(driver, 10)
+    container = wait.until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "div.info.type-00"))
+    )
+    select_el = container.find_element(By.CSS_SELECTOR, "select#currentPageSize")
+    go_btn = container.find_element(By.CSS_SELECTOR, "a.btn-sprite.btn-go[title='GO']")
 
-    logging.info("Setting page size to 100 and clicking GO...")
-
-    wait = WebDriverWait(driver, WAIT_TIMEOUT)
-
-    # 1) select 요소 대기 및 획득
-    logging.debug("Waiting for #currentPageSize select to be present & visible...")
     try:
-        select_el = wait.until(
-            EC.visibility_of_element_located((By.ID, "currentPageSize"))
+        Select(select_el).select_by_value("100")
+    except Exception:
+        driver.execute_script(
+            """
+            const sel = arguments[0];
+            sel.value = '100';
+            sel.dispatchEvent(new Event('change', {bubbles:true}));
+        """,
+            select_el,
         )
-        logging.debug("Select element located")
-    except TimeoutException:
-        logging.error("Could not find visible #currentPageSize within timeout")
-        return False
 
-    # 2) 현재 값 확인
-    try:
-        current_val = select_el.get_attribute("value")
-        logging.debug(f"Current page size value: {current_val}")
-    except StaleElementReferenceException:
-        logging.debug("Select element went stale; re-finding...")
-        select_el = wait.until(
-            EC.visibility_of_element_located((By.ID, "currentPageSize"))
-        )
-        current_val = select_el.get_attribute("value")
-
-    # 3) 값이 100이 아니면 설정 시도
-    if current_val != TARGET_VALUE:
-        set_ok = False
-        logging.debug(
-            "Attempting to change page size to 100 via Select.select_by_value..."
-        )
-        try:
-            Select(select_el).select_by_value(TARGET_VALUE)
-            set_ok = True
-            logging.debug("Selected by value successfully")
-        except (NoSuchElementException, StaleElementReferenceException) as e:
-            logging.warning(
-                f"select_by_value failed: {e}; trying by visible text '100건'"
-            )
-            try:
-                Select(select_el).select_by_visible_text("100건")
-                set_ok = True
-                logging.debug("Selected by visible text successfully")
-            except Exception as e2:
-                logging.warning(
-                    f"select_by_visible_text failed: {e2}; falling back to JS"
-                )
-                try:
-                    driver.execute_script(
-                        """
-                        var sel = document.getElementById('currentPageSize');
-                        if (!sel) return;
-                        sel.value = arguments[0];
-                        // change 이벤트 트리거
-                        var evt = new Event('change', {bubbles:true});
-                        sel.dispatchEvent(evt);
-                        """,
-                        TARGET_VALUE,
-                    )
-                    set_ok = True
-                    logging.debug("JS value set + change event dispatched")
-                except JavascriptException as e3:
-                    logging.error(f"JS fallback failed: {e3}")
-
-        # 4) 설정 검증
-        if set_ok:
-            try:
-                wait.until(
-                    lambda d: d.execute_script(
-                        "var s=document.getElementById('currentPageSize'); return s && s.value === arguments[0];",
-                        TARGET_VALUE,
-                    )
-                )
-                logging.debug("Verified page size set to 100")
-            except TimeoutException:
-                logging.warning("Could not verify page size became 100 within timeout")
-        else:
-            logging.error("Failed to set page size to 100 by any method")
-            return False
-    else:
-        logging.info("Page size already 100")
-
-    # 5) GO 버튼 클릭
-    logging.debug("Waiting for GO button to be clickable...")
-    try:
-        # 컨테이너 내부에 있는 GO 버튼을 우선 시도
-        go_btn = wait.until(
-            EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, ".info.type-00 a.btn-sprite.btn-go[title='GO']")
-            )
-        )
-    except TimeoutException:
-        logging.warning(
-            "Container-scoped GO not found/clickable; trying global selector"
-        )
-        try:
-            go_btn = wait.until(
-                EC.element_to_be_clickable(
-                    (By.CSS_SELECTOR, "a.btn-sprite.btn-go[title='GO']")
-                )
-            )
-        except TimeoutException:
-            logging.error("Could not find a clickable GO button within timeout")
-            return False
-
-    # 스크롤 후 클릭 시도
-    try:
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", go_btn)
-    except JavascriptException:
-        pass
-
-    logging.debug("Clicking GO button...")
+    # GO 클릭
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", go_btn)
     try:
         go_btn.click()
-        logging.info("GO button clicked")
-    except (ElementClickInterceptedException, StaleElementReferenceException) as e:
-        logging.warning(f"Normal click failed ({e}); trying JS click")
-        try:
-            driver.execute_script("arguments[0].click();", go_btn)
-            logging.info("GO button clicked via JS")
-        except JavascriptException as e2:
-            logging.error(f"JS click failed: {e2}")
-            return False
-
-    # 6) (선택) 클릭 이후 변화 대기: 버튼이 사라지거나 비활성/재활성 되는 등
-    #    사이트별로 다르므로 강한 조건을 걸지 않고 짧게 시도
-    try:
-        wait.until(EC.presence_of_element_located((By.ID, "currentPageSize")))
-        logging.debug("Post-click sanity check passed (select still present)")
-    except TimeoutException:
-        logging.debug("Post-click sanity check skipped/failed (might be full reload)")
-
-    logging.info("set_page_size completed successfully")
-    return True
+    except Exception:
+        driver.execute_script("arguments[0].click();", go_btn)
 
 
 def set_date_by_typing(driver, start_date: str, end_date: str):
