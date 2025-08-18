@@ -40,7 +40,7 @@ from airflow.decorators import dag, task
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
@@ -48,6 +48,13 @@ import re
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.common.keys import Keys
+from selenium.common.exceptions import (
+    TimeoutException,
+    NoSuchElementException,
+    StaleElementReferenceException,
+    ElementClickInterceptedException,
+    JavascriptException,
+)
 
 _DOCNO_RE = re.compile(r"openDisclsViewer\('([^']+)'")
 _CO_RE = re.compile(r"companysummary_open\('([^']+)'\)")
@@ -85,6 +92,151 @@ def _setup_driver() -> webdriver.Chrome:
     driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
     driver.implicitly_wait(IMPLICIT_WAIT)
     return driver
+
+
+def set_page_size(driver):
+    """
+    페이지당 게시물 수를 100으로 설정하고 GO 버튼을 클릭한다.
+    - 대상: <select id="currentPageSize">, <a class="btn-sprite btn-go" title="GO">
+    """
+    WAIT_TIMEOUT = 10
+    TARGET_VALUE = "100"
+
+    logging.info("Setting page size to 100 and clicking GO...")
+
+    wait = WebDriverWait(driver, WAIT_TIMEOUT)
+
+    # 1) select 요소 대기 및 획득
+    logging.debug("Waiting for #currentPageSize select to be present & visible...")
+    try:
+        select_el = wait.until(
+            EC.visibility_of_element_located((By.ID, "currentPageSize"))
+        )
+        logging.debug("Select element located")
+    except TimeoutException:
+        logging.error("Could not find visible #currentPageSize within timeout")
+        return False
+
+    # 2) 현재 값 확인
+    try:
+        current_val = select_el.get_attribute("value")
+        logging.debug(f"Current page size value: {current_val}")
+    except StaleElementReferenceException:
+        logging.debug("Select element went stale; re-finding...")
+        select_el = wait.until(
+            EC.visibility_of_element_located((By.ID, "currentPageSize"))
+        )
+        current_val = select_el.get_attribute("value")
+
+    # 3) 값이 100이 아니면 설정 시도
+    if current_val != TARGET_VALUE:
+        set_ok = False
+        logging.debug(
+            "Attempting to change page size to 100 via Select.select_by_value..."
+        )
+        try:
+            Select(select_el).select_by_value(TARGET_VALUE)
+            set_ok = True
+            logging.debug("Selected by value successfully")
+        except (NoSuchElementException, StaleElementReferenceException) as e:
+            logging.warning(
+                f"select_by_value failed: {e}; trying by visible text '100건'"
+            )
+            try:
+                Select(select_el).select_by_visible_text("100건")
+                set_ok = True
+                logging.debug("Selected by visible text successfully")
+            except Exception as e2:
+                logging.warning(
+                    f"select_by_visible_text failed: {e2}; falling back to JS"
+                )
+                try:
+                    driver.execute_script(
+                        """
+                        var sel = document.getElementById('currentPageSize');
+                        if (!sel) return;
+                        sel.value = arguments[0];
+                        // change 이벤트 트리거
+                        var evt = new Event('change', {bubbles:true});
+                        sel.dispatchEvent(evt);
+                        """,
+                        TARGET_VALUE,
+                    )
+                    set_ok = True
+                    logging.debug("JS value set + change event dispatched")
+                except JavascriptException as e3:
+                    logging.error(f"JS fallback failed: {e3}")
+
+        # 4) 설정 검증
+        if set_ok:
+            try:
+                wait.until(
+                    lambda d: d.execute_script(
+                        "var s=document.getElementById('currentPageSize'); return s && s.value === arguments[0];",
+                        TARGET_VALUE,
+                    )
+                )
+                logging.debug("Verified page size set to 100")
+            except TimeoutException:
+                logging.warning("Could not verify page size became 100 within timeout")
+        else:
+            logging.error("Failed to set page size to 100 by any method")
+            return False
+    else:
+        logging.info("Page size already 100")
+
+    # 5) GO 버튼 클릭
+    logging.debug("Waiting for GO button to be clickable...")
+    try:
+        # 컨테이너 내부에 있는 GO 버튼을 우선 시도
+        go_btn = wait.until(
+            EC.element_to_be_clickable(
+                (By.CSS_SELECTOR, ".info.type-00 a.btn-sprite.btn-go[title='GO']")
+            )
+        )
+    except TimeoutException:
+        logging.warning(
+            "Container-scoped GO not found/clickable; trying global selector"
+        )
+        try:
+            go_btn = wait.until(
+                EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, "a.btn-sprite.btn-go[title='GO']")
+                )
+            )
+        except TimeoutException:
+            logging.error("Could not find a clickable GO button within timeout")
+            return False
+
+    # 스크롤 후 클릭 시도
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", go_btn)
+    except JavascriptException:
+        pass
+
+    logging.debug("Clicking GO button...")
+    try:
+        go_btn.click()
+        logging.info("GO button clicked")
+    except (ElementClickInterceptedException, StaleElementReferenceException) as e:
+        logging.warning(f"Normal click failed ({e}); trying JS click")
+        try:
+            driver.execute_script("arguments[0].click();", go_btn)
+            logging.info("GO button clicked via JS")
+        except JavascriptException as e2:
+            logging.error(f"JS click failed: {e2}")
+            return False
+
+    # 6) (선택) 클릭 이후 변화 대기: 버튼이 사라지거나 비활성/재활성 되는 등
+    #    사이트별로 다르므로 강한 조건을 걸지 않고 짧게 시도
+    try:
+        wait.until(EC.presence_of_element_located((By.ID, "currentPageSize")))
+        logging.debug("Post-click sanity check passed (select still present)")
+    except TimeoutException:
+        logging.debug("Post-click sanity check skipped/failed (might be full reload)")
+
+    logging.info("set_page_size completed successfully")
+    return True
 
 
 def set_date_by_typing(driver, start_date: str, end_date: str):
@@ -139,19 +291,29 @@ def set_search_type(driver, type_codes=("01",), select_all=True):
     - type_codes: 문자열 코드 리스트. 예: ("01","02","05",...)
     - select_all: 각 탭에서 '전체선택' 체크할지 여부
     """
+    logging.info(
+        f"Setting search type with codes: {type_codes}, select_all: {select_all}"
+    )
+
     # 0) '공시유형 초기화' 체크 해제 (기본 체크되어 있으면 검색 때 초기화됨)
     try:
+        logging.debug("Attempting to uncheck disclosure type initialization...")
         driver.execute_script(
             """
             var b = document.getElementById('bfrDsclsType');
             if (b && b.checked) { b.click(); }
         """
         )
-    except Exception:
+        logging.debug("Disclosure type initialization unchecked successfully")
+    except Exception as e:
+        logging.warning(f"Failed to uncheck disclosure type initialization: {e}")
         pass
 
     for code in type_codes:
+        logging.info(f"Processing type code: {code}")
+
         # 1) 탭 열기 (사이트 내장 함수 호출)
+        logging.debug(f"Opening disclosure type tab for code: {code}")
         driver.execute_script(
             """
             if (typeof fnDisclosureType === 'function') { fnDisclosureType(arguments[0]); }
@@ -161,19 +323,23 @@ def set_search_type(driver, type_codes=("01",), select_all=True):
 
         # 2) 레이어가 열렸는지 대기
         layer_id = f"dsclsLayer{code}"
+        logging.debug(f"Waiting for layer {layer_id} to be visible...")
         try:
-            WebDriverWait(driver).until(
+            WebDriverWait(driver, timeout=5).until(
                 lambda d: d.execute_script(
                     "var el=document.getElementById(arguments[0]);"
                     "return el && (el.style.display==='' || el.style.display==='block');",
                     layer_id,
                 )
             )
-        except Exception:
+            logging.debug(f"Layer {layer_id} is now visible")
+        except Exception as e:
+            logging.warning(f"Layer {layer_id} not found or not visible: {e}")
             # 레이어 없는 유형도 존재할 수 있으니 스킵
             continue
 
         if select_all:
+            logging.debug(f"Selecting all items in layer {layer_id}...")
             # 3) '전체선택' 체크 + 사이트 함수 호출
             driver.execute_script(
                 """
@@ -186,7 +352,10 @@ def set_search_type(driver, type_codes=("01",), select_all=True):
 
             # 4) 체크가 실제 반영됐는지 검증 (체크된 항목 수 > 0)
             try:
-                WebDriverWait(driver).until(
+                logging.debug(
+                    f"Verifying that items are checked in layer {layer_id}..."
+                )
+                WebDriverWait(driver, timeout=5).until(
                     lambda d: d.execute_script(
                         """
                         var layer = document.getElementById('dsclsLayer'+arguments[0]);
@@ -197,9 +366,15 @@ def set_search_type(driver, type_codes=("01",), select_all=True):
                         code,
                     )
                 )
-            except Exception:
+                logging.debug(f"Items successfully checked in layer {layer_id}")
+            except Exception as e:
+                logging.warning(
+                    f"Could not verify checked items in layer {layer_id}: {e}"
+                )
                 # 일부 유형은 세부 항목이 없을 수도 있음 → 경고만
                 pass
+
+    logging.info("Search type setting completed")
 
 
 def _click_search(driver: webdriver.Chrome):
@@ -231,7 +406,8 @@ def _click_search(driver: webdriver.Chrome):
 
 
 def _wait_results_table(driver: webdriver.Chrome):
-    table_like = WebDriverWait(driver, 5).until(
+    time.sleep(5)
+    table_like = WebDriverWait(driver, 6).until(
         EC.presence_of_element_located(
             (
                 By.XPATH,
@@ -239,6 +415,7 @@ def _wait_results_table(driver: webdriver.Chrome):
             )
         )
     )
+
     return table_like
 
 
@@ -370,12 +547,16 @@ def _crawl_kind_to_csv(
         time.sleep(1.2)
         logging.info("Page loaded, waiting for content to settle")
 
+        set_page_size(driver)
+        time.sleep(1.2)
+        logging.info("Page size set")
+
         logging.info("Setting date range...")
         set_date_by_typing(driver, start_date, end_date)
         logging.info(f"Date range set: {start_date} ~ {end_date}")
 
         logging.info("Setting search type...")
-        set_search_type(driver, type_codes=("01",), select_all=True)
+        set_search_type(driver, type_codes=("01", "05", "06", "08"), select_all=True)
         logging.info("Search type configured")
 
         logging.info("Clicking search button...")
@@ -480,7 +661,7 @@ def kind_disclosure_crawl_dag():
 
             outfile = _crawl_kind_to_csv(
                 start_date="2021-01-01",
-                end_date="2021-06-30",
+                end_date="2022-06-30",
             )
             logging.info(f"CSV saved successfully to: {outfile}")
             print(f"CSV saved to: {outfile}")
