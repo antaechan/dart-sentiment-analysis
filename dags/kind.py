@@ -325,18 +325,31 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
                 if len(tds) < 5:
                     raise Exception("not enough tds")
 
-                announced_at = _safe_text(tds[1])
+                disclosed_at = _safe_text(tds[1])
 
                 # 회사
                 try:
+                    market = (
+                        tds[2].find_element(By.CSS_SELECTOR, "img").get_attribute("alt")
+                    )
+
+                    if market == "유가증권":
+                        market = "KOSPI"
+                    elif market == "코스닥":
+                        market = "KOSDAQ"
+                    elif market == "코넥스":
+                        market = "KONEX"
+                    else:
+                        market = "UNKNOWN"
+
                     a_company = tds[2].find_element(By.CSS_SELECTOR, "a#companysum")
-                    company_txt = a_company.get_attribute("title") or _safe_text(
+                    company_name_txt = a_company.get_attribute("title") or _safe_text(
                         a_company
                     )
                     onclick_company = a_company.get_attribute("onclick") or ""
                 except Exception:
                     a_company = None
-                    company_txt = _safe_text(tds[2])
+                    company_name_txt = _safe_text(tds[2])
                     onclick_company = ""
                 mco = re.search(r"companysummary_open\('([^']+)'\)", onclick_company)
                 company_code = mco.group(1) if mco else ""
@@ -359,9 +372,10 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
 
                 out.append(
                     {
-                        "announced_at": announced_at,
-                        "company": company_txt,
+                        "disclosed_at": disclosed_at,
+                        "company_name": company_name_txt,
                         "company_code": company_code,
+                        "market": market,
                         "title": title_txt,
                         "disclosure_id": disclosure_id,
                         "detail_url": detail_url,
@@ -489,9 +503,10 @@ def _crawl_kind_to_csv(
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
-                    "announced_at",
-                    "company",
+                    "disclosed_at",
+                    "company_name",
                     "company_code",
+                    "market",
                     "title",
                     "disclosure_id",
                     "detail_url",
