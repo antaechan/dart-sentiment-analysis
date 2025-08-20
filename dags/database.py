@@ -12,12 +12,15 @@ from sqlalchemy import text
 
 load_dotenv()
 
-KRX_LISTING = (
-    pl.from_pandas(fdr.StockListing("KRX")[["ISU_CD", "Name", "Market"]])
-    .rename({"ISU_CD": "stock_code", "Name": "company_name", "Market": "market"})
-    .with_columns(pl.col("stock_code").cast(pl.Utf8))
-    .unique(subset="stock_code")
-)
+# KRX_LISTING = (
+#     pl.from_pandas(fdr.StockListing("KRX")[["ISU_CD", "Name", "Market", "Code"]])
+#     .rename({"ISU_CD": "stock_code", "Name": "company_name", "Market": "market"})
+#     .with_columns(pl.col("stock_code").cast(pl.Utf8))
+#     .unique(subset="stock_code")
+# )
+
+
+KRX_LISTING = fdr.StockListing("KRX")[["Code", "ISU_CD", "Name", "Market"]]
 
 
 def get_database_url(host: str = "postgres_events") -> str:
@@ -123,6 +126,7 @@ def create_kind_table_if_not_exists(engine: sa.engine.Engine) -> bool:
             disclosed_at TIMESTAMP,
             company_name VARCHAR(255),
             stock_code VARCHAR(20),
+            short_code VARCHAR(20),
             market VARCHAR(20),
             title TEXT,
             summary_kr   TEXT,
@@ -136,6 +140,7 @@ def create_kind_table_if_not_exists(engine: sa.engine.Engine) -> bool:
         -- 인덱스 생성
         CREATE INDEX idx_kind_disclosed_at ON kind(disclosed_at);
         CREATE INDEX idx_kind_stock_code ON kind(stock_code);
+        CREATE INDEX idx_kind_short_code ON kind(short_code);
         CREATE INDEX idx_kind_disclosure_id ON kind(disclosure_id);
         CREATE INDEX idx_kind_market ON kind(market);
         
@@ -189,16 +194,17 @@ def _insert_rows_to_kind_table(engine, rows: List[dict]) -> None:
             insert_sql = text(
                 """
                 INSERT INTO kind (
-                    disclosure_id, disclosed_at, company_name, stock_code, 
+                    disclosure_id, disclosed_at, company_name, stock_code, short_code,
                     market, title, summary_kr, raw, detail_url
                 ) VALUES (
-                    :disclosure_id, :disclosed_at, :company_name, :stock_code,
+                    :disclosure_id, :disclosed_at, :company_name, :stock_code, :short_code,
                     :stock_code, :market, :title, :summary_kr, :raw, :detail_url
                 )
                 ON CONFLICT (disclosure_id) DO UPDATE SET
                     disclosed_at = EXCLUDED.disclosed_at,
                     company_name = EXCLUDED.company_name,
                     stock_code = EXCLUDED.stock_code,
+                    short_code = EXCLUDED.short_code,
                     market = EXCLUDED.market,
                     title = EXCLUDED.title,
                     summary_kr = EXCLUDED.summary_kr,
@@ -225,6 +231,7 @@ def _insert_rows_to_kind_table(engine, rows: List[dict]) -> None:
                 "disclosed_at": disclosed_at,
                 "company_name": row.get("company_name", ""),
                 "stock_code": row.get("stock_code", ""),
+                "short_code": row.get("short_code", ""),
                 "market": row.get("market", ""),
                 "title": row.get("title", ""),
                 "summary_kr": "",  # CSV에 없는 필드
@@ -246,13 +253,21 @@ def get_stock_code_by_company_name(company_name: str):
     company_name을 받으면 stock_code를 반환합니다.
     """
     try:
-        matched = KRX_LISTING.filter(pl.col("company_name") == company_name)
-        if matched.height > 0:
-            stock_code = matched.select("stock_code").item()
-        else:
-            stock_code = None
+        short_code = KRX_LISTING[KRX_LISTING["Name"] == company_name]["Code"].values[0]
+        stock_code = KRX_LISTING[KRX_LISTING["Name"] == company_name]["ISU_CD"].values[
+            0
+        ]
     except Exception as e:
         # 에러 발생 시 None 반환
         stock_code = None
+        short_code = None
 
-    return stock_code
+    return stock_code, short_code
+
+
+def dart_disclosure_id(dart_number: str):
+    """
+    DART 고유 번호를 반환합니다.
+    """
+
+    return dart_number

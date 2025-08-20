@@ -379,7 +379,13 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
                     {
                         "disclosed_at": disclosed_at,
                         "company_name": company_name_txt,
-                        "stock_code": get_stock_code_by_company_name(company_name_txt)
+                        "stock_code": get_stock_code_by_company_name(company_name_txt)[
+                            0
+                        ]
+                        or "",
+                        "short_code": get_stock_code_by_company_name(company_name_txt)[
+                            1
+                        ]
                         or "",
                         "market": market,
                         "title": title_txt,
@@ -529,6 +535,7 @@ def _crawl_kind_to_csv(
                     "disclosed_at",
                     "company_name",
                     "stock_code",
+                    "short_code",
                     "market",
                     "title",
                     "disclosure_id",
