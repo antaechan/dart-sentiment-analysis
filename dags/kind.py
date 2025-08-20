@@ -55,6 +55,12 @@ from selenium.common.exceptions import (
     ElementClickInterceptedException,
     JavascriptException,
 )
+from database import (
+    create_database_engine,
+    create_kind_table_if_not_exists,
+    _insert_rows_to_kind_table,
+    get_stock_code_by_company_name,
+)
 
 _DOCNO_RE = re.compile(r"openDisclsViewer\('([^']+)'")
 _CO_RE = re.compile(r"companysummary_open\('([^']+)'\)")
@@ -352,7 +358,6 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
                     company_name_txt = _safe_text(tds[2])
                     onclick_company = ""
                 mco = re.search(r"companysummary_open\('([^']+)'\)", onclick_company)
-                company_code = mco.group(1) if mco else ""
 
                 # 제목
                 try:
@@ -374,7 +379,8 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
                     {
                         "disclosed_at": disclosed_at,
                         "company_name": company_name_txt,
-                        "company_code": company_code,
+                        "stock_code": get_stock_code_by_company_name(company_name_txt)
+                        or "",
                         "market": market,
                         "title": title_txt,
                         "disclosure_id": disclosure_id,
@@ -421,6 +427,7 @@ def _crawl_kind_to_csv(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> str:
+
     url = target_url or DEFAULT_URL
     out_dir = output_dir or OUTPUT_DIR
     pages = max_pages or MAX_PAGES
@@ -430,6 +437,11 @@ def _crawl_kind_to_csv(
     logging.info(f"Output directory: {out_dir}")
     logging.info(f"Max pages: {pages}")
     logging.info(f"Date range: {start_date} ~ {end_date}")
+
+    # 데이터베이스 연결 및 테이블 확인
+    engine = create_database_engine()
+    create_kind_table_if_not_exists(engine)
+    logging.info("Database connection established and kind table verified")
 
     os.makedirs(out_dir, exist_ok=True)
     logging.info(f"Output directory created/verified: {out_dir}")
@@ -471,6 +483,17 @@ def _crawl_kind_to_csv(
             logging.info("Results table loaded for current page")
 
             rows = _extract_rows(driver)
+
+            # kind 테이블에 rows 업데이트
+            if rows:
+                try:
+                    _insert_rows_to_kind_table(engine, rows)
+                    logging.info(
+                        f"Successfully inserted {len(rows)} rows to kind table"
+                    )
+                except Exception as e:
+                    logging.error(f"Failed to insert rows to kind table: {str(e)}")
+
             logging.info(f"Extracted {len(rows)} rows from page {page_count + 1}")
 
             all_rows.extend(rows)
@@ -505,7 +528,7 @@ def _crawl_kind_to_csv(
                 fieldnames=[
                     "disclosed_at",
                     "company_name",
-                    "company_code",
+                    "stock_code",
                     "market",
                     "title",
                     "disclosure_id",
