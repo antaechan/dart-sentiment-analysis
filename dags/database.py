@@ -1,24 +1,21 @@
 import os
+from FinanceDataReader.data import StockListing
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 from dotenv import load_dotenv
 import pandas as pd
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 import polars as pl
 import FinanceDataReader as fdr
 from sqlalchemy import text
+import io
+import zipfile
+import requests
+import xml.etree.ElementTree as ET
 
 load_dotenv()
-
-# KRX_LISTING = (
-#     pl.from_pandas(fdr.StockListing("KRX")[["ISU_CD", "Name", "Market", "Code"]])
-#     .rename({"ISU_CD": "stock_code", "Name": "company_name", "Market": "market"})
-#     .with_columns(pl.col("stock_code").cast(pl.Utf8))
-#     .unique(subset="stock_code")
-# )
-
 
 KRX_LISTING = fdr.StockListing("KRX")[["Code", "ISU_CD", "Name", "Market"]]
 
@@ -265,9 +262,149 @@ def get_stock_code_by_company_name(company_name: str):
     return stock_code, short_code
 
 
-def dart_disclosure_id(dart_number: str):
+def create_dart_unique_number_table_if_not_exists(engine: sa.engine.Engine) -> bool:
     """
-    DART 고유 번호를 반환합니다.
+    DART 고유 번호 테이블이 데이터베이스에 없으면 생성합니다.
     """
+    try:
+        inspector = sa.inspect(engine)
+        existing_tables = inspector.get_table_names()
+        if "dart_unique_number" in existing_tables:
+            logging.info("'dart_unique_number' 테이블이 이미 존재합니다.")
+            return False
+        else:
+            create_table_sql = """
+            CREATE TABLE dart_unique_number (
+                id SERIAL PRIMARY KEY,
+                dart_disclosure_id VARCHAR(20) UNIQUE,
+                corp_name VARCHAR(255),
+                corp_eng_name VARCHAR(255),
+                stock_code VARCHAR(20),
+                modify_date VARCHAR(20),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            -- 인덱스 생성
+            CREATE INDEX idx_dart_unique_number_dart_disclosure_id ON dart_unique_number(dart_disclosure_id);
+            CREATE INDEX idx_dart_unique_number_stock_code ON dart_unique_number(stock_code);
+            CREATE INDEX idx_dart_unique_number_corp_name ON dart_unique_number(corp_name);
+            
+            -- updated_at 자동 업데이트를 위한 트리거 함수
+            CREATE OR REPLACE FUNCTION update_dart_unique_number_updated_at_column()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = CURRENT_TIMESTAMP;
+                RETURN NEW;
+            END;
+            $$ language 'plpgsql';
+            
+            -- 트리거 생성
+            CREATE TRIGGER update_dart_unique_number_updated_at 
+                BEFORE UPDATE ON dart_unique_number 
+                FOR EACH ROW 
+                EXECUTE FUNCTION update_dart_unique_number_updated_at_column();
+            """
 
-    return dart_number
+            with engine.connect() as conn:
+                conn.execute(sa.text(create_table_sql))
+                conn.commit()
+
+            logging.info("'dart_unique_number' 테이블이 성공적으로 생성되었습니다.")
+            return True
+    except Exception as e:
+        logging.error(f"DART 고유 번호 테이블 생성 중 오류 발생: {str(e)}")
+        raise
+
+
+def save_into_dart_unique_number_table(
+    api_key: str,
+    engine: sa.engine.Engine,
+    *,
+    timeout: int = 30,
+) -> None:
+    """
+    DART corpCode.xml(zip) 내려받아 XML 파싱 → DataFrame 반환.
+    옵션으로 ZIP/내부 XML/CSV 저장 가능.
+    """
+    url = "https://opendart.fss.or.kr/api/corpCode.xml"
+    params = {"crtfc_key": api_key}
+
+    resp = requests.get(url, params=params, timeout=timeout)
+    resp.raise_for_status()
+    content = resp.content
+
+    # 먼저 ZIP 시도
+    try:
+        zip_bytes = io.BytesIO(content)
+        with zipfile.ZipFile(zip_bytes) as zf:
+            xml_names = [n for n in zf.namelist() if n.lower().endswith(".xml")]
+            if not xml_names:
+                raise ValueError("ZIP 내부에 XML 파일이 없습니다.")
+
+            with zf.open(xml_names[0]) as xf:
+                xml_bytes = xf.read()
+    except zipfile.BadZipFile:
+        # ZIP이 아니면 보통 인증키 오류 등 에러 응답
+        text = content.decode("utf-8", errors="ignore")
+        raise ValueError(
+            f"ZIP이 아닌 응답입니다. 인증키/쿼리를 확인하세요. 응답 예시: {text[:300]}"
+        )
+
+    # XML 파싱 → DataFrame
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        xml_text = xml_bytes.decode("utf-8", errors="ignore")
+        root = ET.fromstring(xml_text)
+
+    status = _find_text(root, ".//status")
+    message = _find_text(root, ".//message")
+    if status and status != "000":
+        raise ValueError(f"DART API 오류(status={status}): {message}")
+
+    corps = root.findall(".//list")
+    rows = []
+    for c in corps:
+        short_code = _find_text(c, "stock_code")
+        if short_code:
+            rows.append(
+                {
+                    "dart_disclosure_id": _find_text(c, "corp_code"),
+                    "corp_name": _find_text(c, "corp_name"),
+                    "corp_eng_name": _find_text(c, "corp_eng_name"),
+                    "stock_code": short_code,
+                    "modify_date": _find_text(c, "modify_date"),
+                }
+            )
+
+    df = pd.DataFrame(
+        rows,
+        columns=[
+            "dart_disclosure_id",
+            "corp_name",
+            "corp_eng_name",
+            "stock_code",
+            "modify_date",
+        ],
+    )
+    # DataFrame을 dart_unique_number 테이블에 삽입
+    try:
+        df.to_sql(
+            "dart_unique_number",
+            engine,
+            if_exists="replace",
+            index=False,
+            method="multi",
+        )
+        logging.info(
+            f"Successfully inserted {len(df)} rows into dart_unique_number table"
+        )
+    except Exception as e:
+        logging.error(f"Failed to insert data into dart_unique_number table: {str(e)}")
+        raise
+
+
+def _find_text(root: ET.Element, path: str) -> str:
+    el = root.find(path)
+    return el.text.strip() if (el is not None and el.text is not None) else ""
