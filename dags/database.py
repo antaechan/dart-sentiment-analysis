@@ -198,7 +198,7 @@ def _insert_rows_to_kind_table(engine, rows: List[dict]) -> None:
                     market, title, summary_kr, raw, detail_url
                 ) VALUES (
                     :disclosure_id, :disclosed_at, :company_name, :stock_code, :short_code,
-                    :stock_code, :market, :title, :summary_kr, :raw, :detail_url
+                    :market, :title, :summary_kr, :raw, :detail_url
                 )
                 ON CONFLICT (disclosure_id) DO UPDATE SET
                     disclosed_at = EXCLUDED.disclosed_at,
