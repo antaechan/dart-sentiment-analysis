@@ -23,11 +23,14 @@ from airflow import DAG
 from airflow.decorators import task
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+from database import create_database_engine
+
 # ---------------------------------------------------------------------------
 # Constants & configuration
 # ---------------------------------------------------------------------------
 MODEL_NAME = "snunlp/KR-FinBert-SC"
 KST = pendulum.timezone("Asia/Seoul")
+
 
 # ---------------------------------------------------------------------------
 # DAG definition
@@ -43,24 +46,24 @@ with DAG(
 
     @task
     def infer_and_update(
-        start_date: datetime | None = None, end_date: datetime | None = None
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ):
         """Infer sentiment for new events and update *disclosure_events*."""
+        # ---------------------------------------------------------------------------
+        # Global model loading (outside of DAG)
+        # ---------------------------------------------------------------------------
+        print(f"[sentiment_dag] Loading AI model and tokenizer: {MODEL_NAME}")
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device).eval()
+        print(f"[sentiment_dag] Model loaded on {device}")
 
         # -----------------------------------------------------------------
         # Build DB engine
         # -----------------------------------------------------------------
-        POSTGRES_USER = os.getenv("POSTGRES_USER")
-        POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-        POSTGRES_DB = os.getenv("POSTGRES_DB")
-        POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres_events")
-        POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-
-        db_url = (
-            f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@"
-            f"{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-        )
-        engine = sa.create_engine(db_url, pool_pre_ping=True, future=True)
+        engine = create_database_engine()
 
         # -----------------------------------------------------------------
         # Ensure cols exist (idempotent)
@@ -82,7 +85,7 @@ with DAG(
             """
             SELECT id, summary_kr
             FROM disclosure_events
-            WHERE stock_code IS NOT NULL AND summary_kr IS NOT NULL AND label IS NULL AND market IN ('KOSPI', 'KOSDAQ')
+            WHERE stock_code IS NOT NULL AND summary_kr IS NOT NULL AND label IS NULL
             AND disclosed_at AT TIME ZONE 'Asia/Seoul' >= :start_date
             AND disclosed_at AT TIME ZONE 'Asia/Seoul' <= :end_date
             AND (
@@ -106,33 +109,60 @@ with DAG(
             return
 
         # -----------------------------------------------------------------
-        # Load tokenizer/model
+        # Batch inference with memory management
         # -----------------------------------------------------------------
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.to(device).eval()
-
-        # -----------------------------------------------------------------
-        # Batch inference
-        # -----------------------------------------------------------------
-        sentences = df["summary_kr"].tolist()
-        encodings = tokenizer(
-            sentences,
-            padding=True,
-            truncation=True,
-            max_length=256,  # Set explicit max_length for Korean financial text
-            return_tensors="pt",
-        )
-        encodings = {k: v.to(device) for k, v in encodings.items()}
-
-        with torch.no_grad():
-            logits = model(**encodings).logits
-            probs = F.softmax(logits, dim=-1).cpu()
-
         id2label = model.config.id2label  # {0: 'negative', 1: 'neutral', 2: 'positive'}
-        df["label"] = [id2label[p.argmax().item()] for p in probs]
-        df["score"] = [round(p.max().item(), 4) for p in probs]
+        BATCH_SIZE = 32  # 메모리에 맞게 조정
+
+        all_labels = []
+        all_scores = []
+        total_batches = (len(df) + BATCH_SIZE - 1) // BATCH_SIZE
+
+        print(
+            f"[sentiment_dag] Starting batch inference: {len(df)} sentences in {total_batches} batches (batch_size={BATCH_SIZE})"
+        )
+
+        for i in range(0, len(df), BATCH_SIZE):
+            batch_sentences = df["summary_kr"].iloc[i : i + BATCH_SIZE].tolist()
+            current_batch = (i // BATCH_SIZE) + 1
+
+            print(
+                f"[sentiment_dag] Processing batch {current_batch}/{total_batches} ({len(batch_sentences)} sentences)"
+            )
+
+            # 배치별로 토크나이징
+            encodings = tokenizer(
+                batch_sentences,
+                padding=True,
+                truncation=True,
+                max_length=256,
+                return_tensors="pt",
+            )
+            encodings = {k: v.to(device) for k, v in encodings.items()}
+
+            # 배치별 추론
+            with torch.no_grad():
+                logits = model(**encodings).logits
+                probs = F.softmax(logits, dim=-1).cpu()
+
+            # 결과 저장
+            batch_labels = [id2label[p.argmax().item()] for p in probs]
+            batch_scores = [round(p.max().item(), 4) for p in probs]
+
+            all_labels.extend(batch_labels)
+            all_scores.extend(batch_scores)
+
+            # 메모리 정리
+            del encodings, logits, probs
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        print(
+            f"[sentiment_dag] Batch inference completed: {len(all_labels)} sentences processed"
+        )
+
+        df["label"] = all_labels
+        df["score"] = all_scores
 
         # -----------------------------------------------------------------
         # Bulk update disclosure_events
@@ -160,5 +190,7 @@ with DAG(
 
         print(f"[sentiment_dag] Updated {len(records)} disclosure_events rows.")
 
-    # Bind task to DAG
-    infer_and_update(start_date=datetime(2023, 11, 1), end_date=datetime(2023, 11, 30))
+    # ---------------------------------------------------------------------------
+    # Task execution
+    # ---------------------------------------------------------------------------
+    infer_and_update(start_date=datetime(2023, 1, 1), end_date=datetime(2023, 10, 31))
