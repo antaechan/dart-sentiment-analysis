@@ -25,7 +25,7 @@ load_dotenv()
     tags=["ticks", "ohlcv"],
     max_active_tasks=1,
 )
-def parquet_to_ohlcv_dag():
+def parquet_to_ohlcv_total_dag():
 
     # 파티션 디렉터리에서 실제 존재하는 체결일자=YYYYMMDD를 수집
     @task
@@ -81,74 +81,8 @@ def parquet_to_ohlcv_dag():
         )
         return target_dates
 
-    # partition에서 얻은 target_dates만 공시 조회에 사용
     @task
-    def build_disclosure_universe(target_dates: list[str]) -> dict[str, list[str]]:
-        print(f"[DEBUG] Universe 구축 시작 — target_dates={len(target_dates)}개")
-        if not target_dates:
-            print("[DEBUG] target_dates 비어있음 → 빈 universe 반환")
-            return {}
-
-        POSTGRES_USER = os.getenv("POSTGRES_USER")
-        POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-        POSTGRES_DB = os.getenv("POSTGRES_DB")
-        POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-
-        db_url = (
-            f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
-            f"@postgres_events:{POSTGRES_PORT}/{POSTGRES_DB}"
-        )
-        engine = sa.create_engine(db_url, pool_pre_ping=True, future=True)
-
-        # target_dates는 "YYYYMMDD" 문자열 리스트이므로 to_char로 비교
-        sql = sa.text(
-            """
-            SELECT
-              (disclosed_at AT TIME ZONE 'Asia/Seoul')::date AS disclosed_at,
-              stock_code
-            FROM disclosure_events
-            WHERE stock_code IS NOT NULL
-              AND to_char((disclosed_at AT TIME ZONE 'Asia/Seoul')::date, 'YYYYMMDD') IN :target_dates
-              AND (
-                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 9 AND 14)
-                  OR
-                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 15
-                   AND EXTRACT(MINUTE FROM disclosed_at AT TIME ZONE 'Asia/Seoul') <= 30)
-              )
-            """
-        ).bindparams(sa.bindparam("target_dates", expanding=True))
-
-        params = {
-            "target_dates": target_dates,
-        }
-
-        with engine.connect() as conn:
-            df_events = pd.read_sql(sql, conn, params=params)
-            print(f"[DEBUG] 조회된 공시 건수: {len(df_events)}")
-
-        if df_events.empty:
-            print("[DEBUG] 공시 결과 비어있음 → 빈 universe 반환")
-            return {}
-
-        events_pl = pl.from_pandas(df_events)
-        events = events_pl.group_by("disclosed_at").agg(
-            pl.col("stock_code").unique().alias("codes")
-        )
-
-        universe = {
-            d.strftime("%Y%m%d"): codes
-            for d, codes in zip(
-                events["disclosed_at"].to_list(),
-                events["codes"].to_list(),
-            )
-        }
-        print(f"[DEBUG] Universe 구축 완료. 일자 수: {len(universe)}")
-        for date_str, codes in universe.items():
-            print(f"[DEBUG] {date_str}: 공시 종목 수 = {len(codes)}개")
-        return universe
-
-    @task
-    def convert(market: str, universe: dict[str, list[str]]) -> list[str]:
+    def convert(market: str, target_dates: list[str]) -> list[str]:
         print(f"[DEBUG] 변환 시작 (market): {market}")
 
         if market == "KOSPI":
@@ -166,18 +100,11 @@ def parquet_to_ohlcv_dag():
             raise ValueError(f"Unknown market root: {market}")
         print(f"[DEBUG] 출력 디렉터리: {OUT_DIR}")
 
-        for date_str, codes in universe.items():
-            if not codes:
-                print(f"[DEBUG] {date_str}: 공시 종목 없음, 건너뜀")
-                continue
-
+        for date_str in target_dates:
             out = OUT_DIR / f"{date_str}_1m.parquet"
             if out.exists():
                 print(f"[DEBUG] {date_str}: 이미 파일 존재, 건너뜀")
                 continue
-
-            print(f"[DEBUG] {date_str}: OHLCV 변환 시작 (codes: {len(codes)}개)")
-            print(f"[DEBUG] 대상 종목코드: {codes}")
 
             # 파티션 데이터 확인
             partition_path = PARTITION_DIR / f"체결일자={date_str}"
@@ -192,10 +119,6 @@ def parquet_to_ohlcv_dag():
                         low_memory=True,
                     )
                     .select(KEEP)
-                    .filter(
-                        (pl.col("체결일자") == int(date_str))
-                        & (pl.col("종목코드").is_in(codes))
-                    )
                     .with_columns(
                         pl.datetime(
                             (pl.col("체결일자") // 10_000),
@@ -213,18 +136,6 @@ def parquet_to_ohlcv_dag():
                     .collect()  # 먼저 collect하여 중간 결과 확인
                 )
 
-                print(f"[DEBUG] 필터링 후 데이터 건수: {len(result_df)}")
-                print(
-                    f"[DEBUG] 필터링 후 종목 수: {result_df.select('종목코드').n_unique()}"
-                )
-
-                if len(result_df) == 0:
-                    print(
-                        f"[WARNING] {date_str}: 필터링 후 데이터가 없어 OHLCV 파일을 생성하지 않습니다."
-                    )
-                    continue
-
-                # OHLCV 집계
                 ohlcv_df = (
                     result_df.lazy()
                     .group_by_dynamic(
@@ -257,13 +168,12 @@ def parquet_to_ohlcv_dag():
                 print(f"[ERROR] {date_str}: OHLCV 변환 중 오류 발생: {e}")
                 continue
 
-        print(f"[DEBUG] 변환 완료. 생성된 파일 수: {len(out_paths)}")
         return out_paths
 
     # ── DAG wiring (expand) ───────────────────────────────────────────────
     print("[DEBUG] DAG 실행 시작")
     markets = ["KOSPI", "KOSDAQ"]
-    target_year_month = ["2023_11", "2023_12"]
+    target_year_month = ["2023_9", "2023_10"]
 
     # market별로 partition에서 target_dates 수집
     # 각 market에 대해 동일한 year_month_list 전달
@@ -271,15 +181,9 @@ def parquet_to_ohlcv_dag():
         year_month_list=target_year_month
     ).expand(market=markets)
 
-    # 수집한 target_dates만으로 공시 Universe 생성
-    universes = build_disclosure_universe.expand(
-        target_dates=target_dates_list,
-    )
-
-    # roots(KOSPI/KOSDAQ)와 universes를 1:1 zip 매핑
-    convert.expand(market=markets, universe=universes)
+    convert.expand(market=markets, target_dates=target_dates_list)
 
     print("[DEBUG] DAG 설정 완료")
 
 
-dag = parquet_to_ohlcv_dag()
+dag = parquet_to_ohlcv_total_dag()

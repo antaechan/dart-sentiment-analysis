@@ -193,4 +193,4 @@ with DAG(
     # ---------------------------------------------------------------------------
     # Task execution
     # ---------------------------------------------------------------------------
-    infer_and_update(start_date=datetime(2023, 1, 1), end_date=datetime(2023, 10, 31))
+    infer_and_update(start_date=datetime(2022, 7, 1), end_date=datetime(2022, 12, 31))
