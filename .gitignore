@@ -9,3 +9,11 @@ events_db/
 config
 
 venv/
+
+*.csv
+
+*.xml
+
+*.zip
+
+servers.json
