@@ -18,6 +18,57 @@ from config import KEEP, KOSPI_OUT_DIR, KOSPI_PARTITION_DIR, TZ
 load_dotenv()
 
 
+def collect_target_dates(year_month: str, market: str) -> list[str]:
+    """
+    year_month_list 예: ["2023_12", "2024_01"]
+    지정한 market의 partition 루트에서 '체결일자=YYYYMMDD' 디렉터리를 스캔해서
+    해당 월들에 속하는 날짜만 뽑아 ["YYYYMMDD", ...]로 반환
+    """
+    root: Path
+    if market == "KOSPI":
+        root = KOSPI_PARTITION_DIR
+    elif market == "KOSDAQ":
+        root = KOSDAQ_PARTITION_DIR
+    else:
+        raise ValueError(f"Unknown market: {market}")
+
+    # 허용 월 셋 (YYYY_MM → (YYYY, MM))
+    allow_months = set()
+    if "_" not in year_month:
+        print(f"[WARNING] 잘못된 형식의 year_month: {year_month}, 건너뜀")
+
+    try:
+        y, m = year_month.split("_")
+        allow_months.add((int(y), int(m)))
+    except (ValueError, IndexError) as e:
+        print(f"[WARNING] year_month 파싱 실패: {year_month}, 오류: {e}, 건너뜀")
+
+    # 체결일자=* 디렉터리만 훑기 (파일까지 내려가지 않음)
+    dates: set[str] = set()
+    try:
+        # os.listdir을 사용하여 디렉터리 목록 조회
+        for item in os.listdir(root):
+
+            try:
+                ymd = item.split("=", 1)[1]  # "YYYYMMDD"
+                if len(ymd) != 8 or not ymd.isdigit():
+                    continue
+                y, m = int(ymd[0:4]), int(ymd[4:6])
+                if (y, m) in allow_months:
+                    dates.add(ymd)
+            except Exception:
+                continue
+    except OSError as e:
+        print(f"[WARNING] 디렉터리 읽기 실패: {e}")
+        return []
+
+    target_dates = sorted(dates)
+    print(
+        f"[DEBUG] [{market}] partition에서 수집된 target_dates({len(target_dates)}): {target_dates[:10]}{' ...' if len(target_dates)>10 else ''}"
+    )
+    return target_dates
+
+
 @dag(
     start_date=datetime(2025, 7, 4),
     schedule="@once",
@@ -27,62 +78,10 @@ load_dotenv()
 )
 def parquet_to_ohlcv_total_dag():
 
-    # 파티션 디렉터리에서 실제 존재하는 체결일자=YYYYMMDD를 수집
     @task
-    def collect_target_dates(year_month_list: list[str], market: str) -> list[str]:
-        """
-        year_month_list 예: ["2023_12", "2024_01"]
-        지정한 market의 partition 루트에서 '체결일자=YYYYMMDD' 디렉터리를 스캔해서
-        해당 월들에 속하는 날짜만 뽑아 ["YYYYMMDD", ...]로 반환
-        """
-        root: Path
-        if market == "KOSPI":
-            root = KOSPI_PARTITION_DIR
-        elif market == "KOSDAQ":
-            root = KOSDAQ_PARTITION_DIR
-        else:
-            raise ValueError(f"Unknown market: {market}")
+    def convert(market: str, target_year_month: str) -> list[str]:
+        target_dates = collect_target_dates(target_year_month, market)
 
-        # 허용 월 셋 (YYYY_MM → (YYYY, MM))
-        allow_months = set()
-        for ym in year_month_list:
-            if "_" not in ym:
-                print(f"[WARNING] 잘못된 형식의 year_month: {ym}, 건너뜀")
-                continue
-            try:
-                y, m = ym.split("_")
-                allow_months.add((int(y), int(m)))
-            except (ValueError, IndexError) as e:
-                print(f"[WARNING] year_month 파싱 실패: {ym}, 오류: {e}, 건너뜀")
-                continue
-
-        # 체결일자=* 디렉터리만 훑기 (파일까지 내려가지 않음)
-        dates: set[str] = set()
-        try:
-            # os.listdir을 사용하여 디렉터리 목록 조회
-            for item in os.listdir(root):
-                print(item)
-                try:
-                    ymd = item.split("=", 1)[1]  # "YYYYMMDD"
-                    if len(ymd) != 8 or not ymd.isdigit():
-                        continue
-                    y, m = int(ymd[0:4]), int(ymd[4:6])
-                    if (y, m) in allow_months:
-                        dates.add(ymd)
-                except Exception:
-                    continue
-        except OSError as e:
-            print(f"[WARNING] 디렉터리 읽기 실패: {e}")
-            return []
-
-        target_dates = sorted(dates)
-        print(
-            f"[DEBUG] [{market}] partition에서 수집된 target_dates({len(target_dates)}): {target_dates[:10]}{' ...' if len(target_dates)>10 else ''}"
-        )
-        return target_dates
-
-    @task
-    def convert(market: str, target_dates: list[str]) -> list[str]:
         print(f"[DEBUG] 변환 시작 (market): {market}")
 
         if market == "KOSPI":
@@ -173,15 +172,22 @@ def parquet_to_ohlcv_total_dag():
     # ── DAG wiring (expand) ───────────────────────────────────────────────
     print("[DEBUG] DAG 실행 시작")
     markets = ["KOSPI", "KOSDAQ"]
-    target_year_month = ["2023_9", "2023_10"]
+    target_year_month_list = [
+        "2022_7",
+        "2022_8",
+        "2022_9",
+        "2022_10",
+        "2022_11",
+        "2022_12",
+        "2023_1",
+        "2023_2",
+        "2023_3",
+        "2023_4",
+        "2023_5",
+        "2023_6",
+    ]
 
-    # market별로 partition에서 target_dates 수집
-    # 각 market에 대해 동일한 year_month_list 전달
-    target_dates_list = collect_target_dates.partial(
-        year_month_list=target_year_month
-    ).expand(market=markets)
-
-    convert.expand(market=markets, target_dates=target_dates_list)
+    convert.expand(market=markets, target_year_month=target_year_month_list)
 
     print("[DEBUG] DAG 설정 완료")
 
