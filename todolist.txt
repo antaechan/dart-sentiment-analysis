@@ -39,6 +39,9 @@ KOSPI 2023 7
 KOSDAQ 2022 8 2023 6 
 
 
+KOSPI 2023_07 ohlcv parquet 파일 손상
+
+
 
 
 

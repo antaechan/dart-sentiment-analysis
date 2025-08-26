@@ -44,7 +44,7 @@ def tick_to_parquet_dag():
             for p in KOSDAQ_RAW_DIR.iterdir()
             if p.suffix == ".dat" and patt.search(p.name)
         ]
-        return kospi
+        return kosdaq
 
     # ② CSV → 날짜별 Parquet 파티션
     @task(pool="parquet-writer", execution_timeout=timedelta(hours=12))

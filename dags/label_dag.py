@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import zoneinfo
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
 import pandas as pd
 import polars as pl
@@ -32,6 +33,31 @@ ENGINE = sa.create_engine(DB_URL, pool_pre_ping=True, future=True)
 def to_min(dt):
     """초·마이크로초를 0으로 만들어 분 단위로 맞춘다."""
     return dt.replace(second=0, microsecond=0)
+
+
+def get_monthly_ranges(
+    start_date: datetime, end_date: datetime
+) -> list[tuple[datetime, datetime]]:
+    """시작일과 종료일 사이의 월별 범위를 반환합니다."""
+    monthly_ranges = []
+    current_date = start_date.replace(day=1)
+
+    while current_date <= end_date:
+        # 해당 월의 마지막 날
+        if current_date.month == 12:
+            next_month = current_date.replace(year=current_date.year + 1, month=1)
+        else:
+            next_month = current_date.replace(month=current_date.month + 1)
+
+        month_end = next_month - timedelta(days=1)
+
+        # 실제 end_date와 비교하여 더 작은 값 사용
+        actual_end = min(month_end, end_date)
+
+        monthly_ranges.append((current_date, actual_end))
+        current_date = next_month
+
+    return monthly_ranges
 
 
 import zoneinfo
@@ -106,10 +132,9 @@ def event_reaction_returns_dag():
             conn.execute(sa.text(alter_sql))
 
     # ────────────────────────────────────────────────────────────────
-    @task
-    def fetch_events() -> list[dict]:
+    def fetch_events_monthly(start_date: datetime, end_date: datetime) -> list[dict]:
         """
-        disclosure_events 중,
+        지정된 월 범위의 disclosure_events 중,
         * 발표 시각이 국내 장중(09:00~15:30, KST) 사이에 발생했고
         * OHLCV Parquet 파일이 존재하는 날짜만 반환
         반환 형식: [{'event_id': …, 'ts': datetime, 'code': str, 'market': str}, …]
@@ -124,7 +149,7 @@ def event_reaction_returns_dag():
             FROM disclosure_events
             WHERE stock_code IS NOT NULL
               AND disclosed_at IS NOT NULL
-              AND market IN ('KOSPI', 'KOSDAQ')
+              AND market IN ('KOSPI', 'KOSDAQ', 'KOSDAQ GLOBAL')
               -- 09:00~15:30 사이 공시만 (KST 기준)
               AND (
                   (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 9 AND 14)
@@ -132,11 +157,16 @@ def event_reaction_returns_dag():
                   (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 15
                    AND EXTRACT(MINUTE FROM disclosed_at AT TIME ZONE 'Asia/Seoul') <= 30)
               )
+              -- 월별 범위 필터링
+              AND disclosed_at >= %(start_date)s
+              AND disclosed_at <= %(end_date)s
             """
-            df = pd.read_sql(sql, conn)
+            df = pd.read_sql(
+                sql, conn, params={"start_date": start_date, "end_date": end_date}
+            )
 
         if df.empty:
-            print("No events found")
+            print(f"No events found for {start_date} to {end_date}")
             return []
 
         df["ts_kst"] = df["ts_kst"].dt.tz_localize("Asia/Seoul")
@@ -149,11 +179,37 @@ def event_reaction_returns_dag():
             orient="records"
         )
 
+    @task
+    def fetch_events(
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> list[list[dict]]:
+        """
+        전체 기간을 월별로 분할하여 이벤트를 가져옵니다.
+        반환 형식: [[월1_이벤트들], [월2_이벤트들], ...]
+        """
+        monthly_ranges = get_monthly_ranges(start_date, end_date)
+        print(
+            f"Processing {len(monthly_ranges)} monthly ranges from {start_date} to {end_date}"
+        )
+
+        # 각 월별 범위에 대해 이벤트 가져오기
+        monthly_events = []
+        for month_start, month_end in monthly_ranges:
+            month_events = fetch_events_monthly(month_start, month_end)
+            if month_events:  # 빈 리스트가 아닌 경우만 추가
+                monthly_events.append(month_events)
+                print(
+                    f"Found {len(month_events)} events for {month_start.strftime('%Y-%m')}"
+                )
+
+        return monthly_events
+
     # ────────────────────────────────────────────────────────────────
     @task
-    def compute_returns(events: list[dict]) -> None:
+    def compute_returns_monthly(events: list[dict]) -> None:
         """
-        ret_* 컬럼을 disclosure_events 테이블에 직접 UPDATE.
+        한 달의 이벤트들에 대해 ret_* 컬럼을 disclosure_events 테이블에 직접 UPDATE.
         """
         if not events:
             return
@@ -168,7 +224,11 @@ def event_reaction_returns_dag():
         for date_int, ev_list in events_by_date.items():
             # 시장별로 이벤트 그룹화
             kospi_events = [ev for ev in ev_list if ev["market"] == "KOSPI"]
-            kosdaq_events = [ev for ev in ev_list if ev["market"] == "KOSDAQ"]
+            kosdaq_events = [
+                ev
+                for ev in ev_list
+                if ev["market"] == "KOSDAQ" or ev["market"] == "KOSDAQ GLOBAL"
+            ]
 
             # KOSPI 이벤트 처리
             if kospi_events:
@@ -203,7 +263,7 @@ def event_reaction_returns_dag():
         if not updates:
             return
 
-        print("updates: ", updates)
+        print(f"Processing {len(updates)} updates for monthly batch")
 
         # ---------- bulk UPDATE ----------
         with ENGINE.begin() as conn:
@@ -223,7 +283,7 @@ def event_reaction_returns_dag():
 
             # executemany → 한 번에 다중 업데이트
             result = conn.execute(stmt, updates)
-            print("rows matched → modified:", result.rowcount)
+            print(f"Monthly batch completed: {result.rowcount} rows updated")
 
     def calculate_returns_for_events(events: list[dict], price_map: dict) -> list[dict]:
         """이벤트 리스트에 대해 수익률을 계산하는 헬퍼 함수"""
@@ -266,8 +326,12 @@ def event_reaction_returns_dag():
 
     # ───────────────────────── DAG 의 Task 의존성 ───────────────────
     columns_task = ensure_columns()
-    events_task = fetch_events()
-    returns_task = compute_returns(events_task)
+    events_task = fetch_events(
+        start_date=datetime(2022, 7, 1),
+        end_date=datetime(2022, 12, 31),
+    )
+    returns_task = compute_returns_monthly.expand(events=events_task)
+
     columns_task >> returns_task
 
 
