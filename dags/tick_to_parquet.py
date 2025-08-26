@@ -44,14 +44,13 @@ def tick_to_parquet_dag():
             for p in KOSDAQ_RAW_DIR.iterdir()
             if p.suffix == ".dat" and patt.search(p.name)
         ]
-        return kosdaq
+        return kospi
 
     # ② CSV → 날짜별 Parquet 파티션
     @task(pool="parquet-writer", execution_timeout=timedelta(hours=12))
     def convert(file_path: str) -> str:
         p = Path(file_path)
         out_dir = KOSPI_PARTITION_DIR if "KOSPI" in p.parts else KOSDAQ_PARTITION_DIR
-        out_dir.mkdir(parents=True, exist_ok=True)
 
         # LazyFrame + streaming
         lf = (
@@ -81,7 +80,7 @@ def tick_to_parquet_dag():
         return str(out_dir)
 
     # ── Dynamic task-mapping ──
-    convert.expand(file_path=get_files(year_month_list=["2022_12"]))
+    convert.expand(file_path=get_files(year_month_list=["2023_07"]))
 
 
 dag = tick_to_parquet_dag()

@@ -573,7 +573,7 @@ local_tz = pendulum.timezone("Asia/Seoul")
     dag_id="kind_disclosure_crawl_dag",
     description="KIND 상세검색에서 공시 발표시간/회사명/제목을 수집해 CSV로 저장 (TaskFlow)",
     start_date=pendulum.datetime(2025, 8, 1, tz=local_tz),
-    schedule="0 * * * *",  # 매 정시마다
+    schedule="@once",
     catchup=False,
     tags=["KIND", "selenium", "disclosure"],
 )

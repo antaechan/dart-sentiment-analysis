@@ -171,20 +171,9 @@ def parquet_to_ohlcv_total_dag():
 
     # ── DAG wiring (expand) ───────────────────────────────────────────────
     print("[DEBUG] DAG 실행 시작")
-    markets = ["KOSPI", "KOSDAQ"]
+    markets = ["KOSPI"]
     target_year_month_list = [
-        "2022_7",
-        "2022_8",
-        "2022_9",
-        "2022_10",
-        "2022_11",
-        "2022_12",
-        "2023_1",
-        "2023_2",
-        "2023_3",
-        "2023_4",
-        "2023_5",
-        "2023_6",
+        "2023_07",
     ]
 
     convert.expand(market=markets, target_year_month=target_year_month_list)

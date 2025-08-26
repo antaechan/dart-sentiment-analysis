@@ -354,6 +354,10 @@ services:
       timeout: 5s # 응답 시간 제한
       retries: 5 # 실패 시 재시도 횟수
       start_period: 30s # 초기 대기 시간
+    command:
+      - "postgres"
+      - "-c"
+      - "listen_addresses=*"
     volumes:
       # - /Volumes/T7/events_db:/var/lib/postgresql/data   # ← 외장 SSD 경로
       - ./events_db:/var/lib/postgresql/data # ← 외장 SSD 경로
