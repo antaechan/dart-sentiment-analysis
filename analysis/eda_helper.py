@@ -134,24 +134,13 @@ def classify_disclosure_type(report_name):
             "관리절차 개시",
             "관리절차 중단",
         ],
-        "소송": [
-            "소송",
-            "소송 등의 제기",
-            "법적분쟁",
-            "고소",
-            "고발",
-        ],
+        "소송": ["소송", "소송 등의 제기", "법적분쟁", "고소", "고발", "법률"],
         "해외상장": [
             "해외 증권시장",
             "해외 상장",
             "해외 상장 결정",
             "해외 상장폐지",
             "해외 상장폐지 결정",
-        ],
-        "전환사채권": [
-            "전환사채권",
-            "전환사채권 발행결정",
-            "전환사채",
         ],
         "신주인수권부사채권": [
             "신주인수권부사채권",
@@ -169,12 +158,28 @@ def classify_disclosure_type(report_name):
             "AT1",
             "조건부자본증권",
         ],
-        "자기주식": [
-            "자기주식",
+        "자사주취득": [
             "자기주식 취득",
-            "자기주식 처분",
+            "자기주식취득",
             "자기주식취득 신탁계약",
-            "자사주",
+            "자사주 취득",
+            "자기주식 매입",
+        ],
+        "자사주처분": [
+            "자기주식 처분",
+            "자기주식처분",
+            "자기주식 매각",
+            "자사주 처분",
+        ],
+        "자사주소각": [
+            "주식소각",
+            "주식소각결정",
+            "소각",
+        ],
+        "전환사채권발행": [
+            "전환사채권",
+            "전환사채권발행결정",
+            "전환사채",
         ],
         "영업양수도": [
             "영업양수",
@@ -199,7 +204,7 @@ def classify_disclosure_type(report_name):
             "주식교환·이전",
             "주식교환·이전 결정",
         ],
-        "계약체결": [
+        "공급계약체결": [
             "단일판매ㆍ공급계약체결",
             "계약체결",
             "공급계약",
@@ -224,24 +229,41 @@ def classify_disclosure_type(report_name):
             "반기보고서",
             "사업보고서",
         ],
-        "투자판단": [
-            "투자판단관련주요경영사항",
-            "투자판단",
-            "주요경영사항",
-        ],
         "특허권": [
             "특허권 취득",
             "특허",
             "지적재산권",
             "라이선스",
         ],
-        "임상시험": [
-            "임상시험",
-            "IND",
-            "FDA",
-            "임상",
-            "시험계획",
-            "임상시험계획",
+        "기술이전": [
+            "기술이전",
+            "기술라이선스",
+            "기술계약",
+            "마일스톤",
+        ],
+        "품목허가승인": [
+            "품목허가 승인",
+            "품목허가 취득",
+            "허가취득",
+            "허가 획득",
+            "승인 취득",
+        ],
+        "품목허가신청": [
+            "허가신청",
+            "품목허가 신청",
+            "품목 허가 신청",
+            "품목허가 변경 신청",
+        ],
+        "임상시험계획신청": [
+            "임상시험계획 신청",
+            "임상시험계획승인신청",
+            "승인신청",
+            "시험계획서(CTN) 제출",
+        ],
+        "임상시험계획승인": [
+            "임상시험계획 승인",
+            "임상시험계획 변경 승인",
+            "임상시험계획(IND) 승인)",
         ],
         "전환가액조정": [
             "전환가액의조정",
@@ -286,37 +308,20 @@ def classify_disclosure_type(report_name):
             "손익구조",
             "매출구조",
         ],
-        "전환청구권": [
+        "전환청구권행사": [
             "전환청구권행사",
             "전환청구",
             "전환행사",
-        ],
-        "주식소각": [
-            "주식소각",
-            "주식소각결정",
-            "소각",
         ],
         "자문용역": [
             "자문용역",
             "자문계약",
             "용역계약",
         ],
-        "기술이전": [
-            "기술이전",
-            "기술라이선스",
-            "기술계약",
-            "마일스톤",
-        ],
         "국책과제": [
             "국책과제",
             "정부과제",
             "과제선정",
-        ],
-        "품목허가": [
-            "품목허가",
-            "허가신청",
-            "허가취득",
-            "승인",
         ],
         "해외진출": [
             "해외진출",
@@ -350,7 +355,42 @@ def classify_disclosure_type(report_name):
             "배당결정",
             "분기배당",
         ],
+        "투자판단": [
+            "투자판단관련주요경영사항",
+            "투자판단",
+            "주요경영사항",
+        ],
     }
+
+    if "기술이전" in report_name:
+        return "기술이전"
+
+    if "국책과제" in report_name:
+        return "국책과제"
+
+    # 임상 관련 세부 분류
+    if "임상" in report_name:
+        if "임상시험계획승인신청등결정" in report_name:
+            return "임상시험계획승인"
+
+        # 임상시험계획신청 (임상, 신청 모두 포함)
+        if "임상" in report_name and (
+            "신청" in report_name
+            or "제출" in report_name
+            or "시험계획서" in report_name
+        ):
+            return "임상시험계획신청"
+        # 임상시험계획승인 (임상, 계획, 승인 모두 포함)
+        elif all(keyword in report_name for keyword in ["임상", "계획", "승인"]):
+            return "임상시험계획승인"
+        # 임상시험결과 (임상, 결과 모두 포함)
+        if "임상" in report_name and ("결과" in report_name or "수령" in report_name):
+            return "임상시험결과"
+        elif "임상" in report_name and ("철회" in report_name or "종료" in report_name):
+            return "임상시험계획철회"
+        # 기타 임상 관련
+        else:
+            return "임상관련"
 
     # 키워드 매칭으로 공시 유형 분류
     for disclosure_type, keywords in disclosure_keywords.items():
@@ -407,13 +447,33 @@ def calculate_return_statistics_by_category(df_with_returns, ret_columns):
         "_".join(col).strip() for col in category_return_stats.columns
     ]
 
-    # 1개월 수익률 기준으로 정렬하여 상위 10개 표시
+    # 양수 비율 계산 및 추가
+    positive_ratios = {}
+    for col in ret_columns:
+        positive_ratios[f"{col}_positive_ratio"] = (
+            df_with_returns.groupby("disclosure_category")[col]
+            .apply(
+                lambda x: (
+                    (x > 0).sum() / len(x.dropna()) * 100 if len(x.dropna()) > 0 else 0
+                )
+            )
+            .round(1)
+        )
+
+    # 양수 비율을 기존 통계에 추가
+    for col_name, ratios in positive_ratios.items():
+        category_return_stats[col_name] = ratios
+
+    # 1분 수익률 기준으로 정렬하여 상위 10개 표시
     if "ret_1m_mean" in category_return_stats.columns:
         top_categories = category_return_stats.sort_values(
             "ret_1m_mean", ascending=False
         ).head(10)
-        print("\n1개월 수익률 기준 상위 10개 공시 카테고리:")
-        print(top_categories[["ret_1m_count", "ret_1m_mean", "ret_1m_std"]])
+        print("\n1분 수익률 기준 상위 10개 공시 카테고리:")
+        display_columns = ["ret_1m_count", "ret_1m_mean", "ret_1m_std"]
+        if "ret_1m_positive_ratio" in category_return_stats.columns:
+            display_columns.append("ret_1m_positive_ratio")
+        print(top_categories[display_columns])
 
     return category_return_stats
 
