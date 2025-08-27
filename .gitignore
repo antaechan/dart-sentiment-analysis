@@ -17,3 +17,5 @@ venv/
 *.zip
 
 servers.json
+
+.DS_Store
