@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from config import KOSDAQ_OUT_DIR, KOSPI_OUT_DIR, TZ
 
-LAGS_MIN = [1, 3, 10, 15, 30, 60]  # 분 단위 지연
+LAGS_MIN = [3, 10, 15, 30, 60]  # 분 단위 지연
 
 # ─────────── DB 커넥션 ─────────────────────────────────────────────
 POSTGRES_USER = os.getenv("POSTGRES_USER")
@@ -69,7 +69,7 @@ import polars as pl
 def build_price_map_with_ffill(ohlcv: pl.DataFrame, date_int: int) -> dict:
     """
     해당 날짜(09:00~15:30, 1분 간격)의 모든 분 타임스탬프를 만들고,
-    종목별로 close를 forward fill하여 (code, ts) -> close 맵을 만든다.
+    종목별로 close와 high를 forward fill하여 (code, ts) -> (close, high) 맵을 만든다.
     """
     tz = zoneinfo.ZoneInfo(TZ)
 
@@ -93,14 +93,19 @@ def build_price_map_with_ffill(ohlcv: pl.DataFrame, date_int: int) -> dict:
     df = (
         full_grid.join(ohlcv, on=["code", "ts"], how="left")
         .sort(["code", "ts"])
-        .with_columns(pl.col("close").forward_fill().alias("close"))
+        .with_columns(
+            [
+                pl.col("close").forward_fill().alias("close"),
+                pl.col("high").forward_fill().alias("high"),
+            ]
+        )
     )
 
-    # 4) dict로 변환 (None 걸러내기)
+    # 4) dict로 변환 (None 걸러내기) - close와 high 모두 포함
     price_map = {
-        (row["code"], row["ts"]): row["close"]
+        (row["code"], row["ts"]): {"close": row["close"], "high": row["high"]}
         for row in df.iter_rows(named=True)
-        if row["close"] is not None
+        if row["close"] is not None and row["high"] is not None
     }
     return price_map
 
@@ -112,21 +117,32 @@ def build_price_map_with_ffill(ohlcv: pl.DataFrame, date_int: int) -> dict:
     tags=["ticks", "event_returns"],
     max_active_tasks=1,
 )
-def event_reaction_returns_dag():
+def event_reaction_returns_high_dag():
     @task
     def ensure_columns() -> None:
         """
-        disclosure_events 테이블에 수익률 컬럼(ret_1m, ret_3m, ret_10m, ret_15m, ret_30m, ret_60m)이
+        disclosure_events 테이블에 수익률 컬럼(ret_1m, ret_3m, ret_10m, ret_15m, ret_30m, ret_60m)과
+        high 기준 수익률 컬럼(ret_high_1m, ret_high_3m, ret_high_10m, ret_high_15m, ret_high_30m, ret_high_60m)과
+        peak_timedelta 컬럼들(peak_timedelta_1m, peak_timedelta_3m, peak_timedelta_10m, peak_timedelta_15m, peak_timedelta_30m, peak_timedelta_60m)이
         없으면 자동으로 추가합니다.
         """
         alter_sql = """
         ALTER TABLE disclosure_events
-            ADD COLUMN IF NOT EXISTS ret_1m  DOUBLE PRECISION,
             ADD COLUMN IF NOT EXISTS ret_3m  DOUBLE PRECISION,
             ADD COLUMN IF NOT EXISTS ret_10m DOUBLE PRECISION,
             ADD COLUMN IF NOT EXISTS ret_15m DOUBLE PRECISION,
             ADD COLUMN IF NOT EXISTS ret_30m DOUBLE PRECISION,
-            ADD COLUMN IF NOT EXISTS ret_60m DOUBLE PRECISION;
+            ADD COLUMN IF NOT EXISTS ret_60m DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ret_high_3m  DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ret_high_10m DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ret_high_15m DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ret_high_30m DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS ret_high_60m DOUBLE PRECISION,
+            ADD COLUMN IF NOT EXISTS peak_timedelta_3m  INTEGER,
+            ADD COLUMN IF NOT EXISTS peak_timedelta_10m INTEGER,
+            ADD COLUMN IF NOT EXISTS peak_timedelta_15m INTEGER,
+            ADD COLUMN IF NOT EXISTS peak_timedelta_30m INTEGER,
+            ADD COLUMN IF NOT EXISTS peak_timedelta_60m INTEGER;
         """
         with ENGINE.begin() as conn:
             conn.execute(sa.text(alter_sql))
@@ -209,8 +225,10 @@ def event_reaction_returns_dag():
     @task
     def compute_returns_monthly(events: list[dict]) -> None:
         """
-        한 달의 이벤트들에 대해 ret_* 컬럼을 disclosure_events 테이블에 직접 UPDATE.
+        한 달의 이벤트들에 대해 ret_high_* 컬럼을 disclosure_events 테이블에 직접 UPDATE.
         """
+        price_type = "high"  # 하드코딩
+
         if not events:
             return
 
@@ -219,7 +237,7 @@ def event_reaction_returns_dag():
         for ev in events:
             events_by_date.setdefault(ev["date_int"], []).append(ev)
 
-        updates = []  # [{event_id:…, ret_1m:…}, …] 누적
+        updates = []  # [{event_id:…, ret_high_3m:…}, …] 누적
 
         for date_int, ev_list in events_by_date.items():
             # 시장별로 이벤트 그룹화
@@ -235,14 +253,16 @@ def event_reaction_returns_dag():
                 kospi_pq_path = KOSPI_OUT_DIR / f"{date_int:08d}_1m.parquet"
                 if kospi_pq_path.exists():
                     ohlcv = pl.read_parquet(
-                        kospi_pq_path, columns=["ts", "종목코드", "close"]
+                        kospi_pq_path, columns=["ts", "종목코드", "close", "high"]
                     ).rename({"종목코드": "code"})
 
                     price_map = build_price_map_with_ffill(ohlcv, date_int)
 
                     # KOSPI 이벤트들의 수익률 계산
                     updates.extend(
-                        calculate_returns_for_events(kospi_events, price_map)
+                        calculate_returns_for_events(
+                            kospi_events, price_map, price_type
+                        )
                     )
 
             # KOSDAQ 이벤트 처리
@@ -250,20 +270,22 @@ def event_reaction_returns_dag():
                 kosdaq_pq_path = KOSDAQ_OUT_DIR / f"{date_int:08d}_1m.parquet"
                 if kosdaq_pq_path.exists():
                     ohlcv = pl.read_parquet(
-                        kosdaq_pq_path, columns=["ts", "종목코드", "close"]
+                        kosdaq_pq_path, columns=["ts", "종목코드", "close", "high"]
                     ).rename({"종목코드": "code"})
 
                     price_map = build_price_map_with_ffill(ohlcv, date_int)
 
                     # KOSDAQ 이벤트들의 수익률 계산
                     updates.extend(
-                        calculate_returns_for_events(kosdaq_events, price_map)
+                        calculate_returns_for_events(
+                            kosdaq_events, price_map, price_type
+                        )
                     )
 
         if not updates:
             return
 
-        print(f"Processing {len(updates)} updates for monthly batch")
+        print(f"Processing {len(updates)} updates for monthly batch ({price_type})")
 
         # ---------- bulk UPDATE ----------
         with ENGINE.begin() as conn:
@@ -271,12 +293,16 @@ def event_reaction_returns_dag():
                 """
                 UPDATE disclosure_events AS d
                 SET
-                    ret_1m  = COALESCE(:ret_1m,  d.ret_1m),
-                    ret_3m  = COALESCE(:ret_3m,  d.ret_3m),
-                    ret_10m = COALESCE(:ret_10m, d.ret_10m),
-                    ret_15m = COALESCE(:ret_15m, d.ret_15m),
-                    ret_30m = COALESCE(:ret_30m, d.ret_30m),
-                    ret_60m = COALESCE(:ret_60m, d.ret_60m)
+                    ret_high_3m  = COALESCE(:ret_high_3m,  d.ret_high_3m),
+                    ret_high_10m = COALESCE(:ret_high_10m, d.ret_high_10m),
+                    ret_high_15m = COALESCE(:ret_high_15m, d.ret_high_15m),
+                    ret_high_30m = COALESCE(:ret_high_30m, d.ret_high_30m),
+                    ret_high_60m = COALESCE(:ret_high_60m, d.ret_high_60m),
+                    peak_timedelta_3m  = COALESCE(:peak_timedelta_3m,  d.peak_timedelta_3m),
+                    peak_timedelta_10m = COALESCE(:peak_timedelta_10m, d.peak_timedelta_10m),
+                    peak_timedelta_15m = COALESCE(:peak_timedelta_15m, d.peak_timedelta_15m),
+                    peak_timedelta_30m = COALESCE(:peak_timedelta_30m, d.peak_timedelta_30m),
+                    peak_timedelta_60m = COALESCE(:peak_timedelta_60m, d.peak_timedelta_60m)
                 WHERE d.id = :event_id
                 """
             )
@@ -285,16 +311,37 @@ def event_reaction_returns_dag():
             result = conn.execute(stmt, updates)
             print(f"Monthly batch completed: {result.rowcount} rows updated")
 
-    def calculate_returns_for_events(events: list[dict], price_map: dict) -> list[dict]:
+    def calculate_returns_for_events(
+        events: list[dict], price_map: dict, price_type: str
+    ) -> list[dict]:
         """이벤트 리스트에 대해 수익률을 계산하는 헬퍼 함수"""
-        RET_COLS = {
-            1: "ret_1m",
-            3: "ret_3m",
-            10: "ret_10m",
-            15: "ret_15m",
-            30: "ret_30m",
-            60: "ret_60m",
-        }
+        if price_type == "close":
+            RET_COLS = {
+                3: "ret_3m",
+                10: "ret_10m",
+                15: "ret_15m",
+                30: "ret_30m",
+                60: "ret_60m",
+            }
+            PEAK_COLS = {}  # close는 peak_timedelta가 필요없음
+        elif price_type == "high":
+            RET_COLS = {
+                3: "ret_high_3m",
+                10: "ret_high_10m",
+                15: "ret_high_15m",
+                30: "ret_high_30m",
+                60: "ret_high_60m",
+            }
+            PEAK_COLS = {
+                3: "peak_timedelta_3m",
+                10: "peak_timedelta_10m",
+                15: "peak_timedelta_15m",
+                30: "peak_timedelta_30m",
+                60: "peak_timedelta_60m",
+            }
+        else:
+            raise ValueError("price_type must be 'close' or 'high'")
+
         updates = []
 
         for ev in events:
@@ -303,22 +350,52 @@ def event_reaction_returns_dag():
                     tzinfo=zoneinfo.ZoneInfo(TZ)
                 )
             )
-            p0 = price_map.get((ev["stock_code"], ts0))
+            price_data = price_map.get((ev["stock_code"], ts0))
+            if price_data is None:
+                continue
+
+            p0 = price_data[price_type]
             print(f"ev: {ev}, ts0: {ts0}, p0: {p0}")
 
             if p0 is None or p0 == 0:
                 continue
 
             rec = {"event_id": ev["event_id"]}
+
             for lag in LAGS_MIN:
-                p_lag = price_map.get((ev["stock_code"], ts0 + timedelta(minutes=lag)))
-                if p_lag:
-                    rec[RET_COLS[lag]] = round((p_lag / p0 - 1.0) * 100.0, 2)
+                if price_type == "close":
+                    # close는 단순히 lag분 후의 close와 비교
+                    price_data_lag = price_map.get(
+                        (ev["stock_code"], ts0 + timedelta(minutes=lag))
+                    )
+                    if price_data_lag:
+                        p_lag = price_data_lag[price_type]
+                        if p_lag:
+                            rec[RET_COLS[lag]] = round((p_lag / p0 - 1.0) * 100.0, 2)
+                else:
+                    # high는 해당 기간의 최고값과 비교
+                    max_high = p0
+                    peak_minutes = 0
+
+                    # ts0부터 ts0 + lag분까지의 모든 high 값 중 최고값 찾기
+                    for minute in range(lag + 1):
+                        check_ts = ts0 + timedelta(minutes=minute)
+                        price_data_check = price_map.get((ev["stock_code"], check_ts))
+                        if price_data_check and price_data_check[price_type]:
+                            if price_data_check[price_type] > max_high:
+                                max_high = price_data_check[price_type]
+                                peak_minutes = minute
+
+                    if max_high > p0:
+                        rec[RET_COLS[lag]] = round((max_high / p0 - 1.0) * 100.0, 2)
+                        rec[PEAK_COLS[lag]] = peak_minutes
 
             # ★ 계산된 수익률이 하나라도 있을 때만 업데이트
             if any(k in rec for k in RET_COLS.values()):
                 # ★ 누락된 칼럼을 None 으로 채워 넣음
                 for col in RET_COLS.values():
+                    rec.setdefault(col, None)
+                for col in PEAK_COLS.values():
                     rec.setdefault(col, None)
                 updates.append(rec)
 
@@ -335,4 +412,4 @@ def event_reaction_returns_dag():
     columns_task >> returns_task
 
 
-dag = event_reaction_returns_dag()
+dag = event_reaction_returns_high_dag()
