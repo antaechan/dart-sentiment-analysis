@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-"""Airflow DAG: summarize_disclosure_events_batch_dag (monthly-chunked)
-
-요약 대상 공시(raw 텍스트)를 OpenAI Batch API로 월 단위로 일괄 요약하여
-PostgreSQL `disclosure_events.summary_kr` 컬럼에 저장한다.
-- ❶ summary 컬럼 보장 → (아래 월 반복)
-  ❷ 대상 조회 → ❸ JSONL 업로드 → ❹ Batch Job 생성 →
-  ❺ 완료 대기 → ❻ 결과 다운로드 → ❼ DB 업데이트
+"""
+공시 텍스트에서 구체적인 회사명을 마스킹하여 회사 A, 회사 B 이런 식으로 저장한다.
 """
 
 import json
@@ -37,24 +32,43 @@ ENGINE = sa.create_engine(DB_URL, pool_pre_ping=True, future=True)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-SYSTEM_PROMPT = (
-    "You are a helpful assistant to summarize the given text about a Korean corporate "
-    "report within 2~3 sentences. Please respond only in Korean."
+# 마스킹을 위한 시스템 프롬프트
+MASKING_SYSTEM_PROMPT = (
+    "당신은 한국 기업 공시 텍스트에서 구체적인 회사명을 마스킹하는 작업을 수행합니다. "
+    "텍스트에서 언급된 모든 회사명을 '회사 A', '회사 B', '회사 C' 등의 형태로 순서대로 마스킹해주세요. "
+    "같은 회사가 여러 번 언급되면 동일한 마스킹을 사용하세요. "
+    "마스킹된 텍스트만 반환하고 다른 설명은 하지 마세요."
 )
-MODEL = "gpt-4.1-nano"
+MODEL = "gpt-5-nano"
 
 
 @dag(
     start_date=datetime(2025, 7, 4),
     schedule="@once",
     catchup=False,
-    tags=["openai", "summarize", "batch"],
+    tags=["openai", "masking", "batch"],
     max_active_tasks=1,
     # DAG 기본 파라미터는 문자열로! (JSON-serializable)
-    params={"start_date": "2023-04-01", "end_date": "2023-05-31"},
+    params={"start_date": "2022-07-01", "end_date": "2023-12-31"},
 )
-def summarize_disclosure_events_batch_dag():
-    """일괄 Batch 요약 DAG (월 단위 청크 처리)"""
+def mask_disclosure_events_batch_dag():
+    """일괄 Batch 마스킹 DAG (월 단위 청크 처리)"""
+
+    @task(task_id="create_label_table")
+    def create_label_table() -> None:
+        """label 테이블이 없으면 생성"""
+        sql = """
+            CREATE TABLE IF NOT EXISTS label (
+                id INTEGER PRIMARY KEY,
+                summary_kr TEXT,
+                masked TEXT,
+                label INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """
+        with ENGINE.begin() as conn:
+            conn.execute(sa.text(sql))
+        print("Label table created or already exists")
 
     @task(task_id="build_month_ranges")
     def build_month_ranges(start_date_str: str, end_date_str: str) -> list[dict]:
@@ -90,17 +104,16 @@ def summarize_disclosure_events_batch_dag():
         print(f"First range: {out[0] if out else 'None'}")
         return out
 
-    @task(task_id="fetch_events_to_summarize")
-    def fetch_events_to_summarize(
+    @task(task_id="fetch_events_to_mask")
+    def fetch_events_to_mask(
         start_date: str | None = None, end_date: str | None = None
     ) -> list[dict]:
-        """여기서 문자열 → datetime은 DB 쿼리 바인딩 직전에만 변환해도 되지만,
-        우리는 그냥 문자열 그대로 바인딩(타임존 변환이 SQL안에서 처리되므로 OK)"""
+        """events 테이블에서 summary_kr이 있는 데이터를 가져와서 마스킹 처리"""
         sql = """
-            SELECT id, raw
+            SELECT id, summary_kr
             FROM disclosure_events
-            WHERE raw IS NOT NULL
-              AND raw <> ''
+            WHERE summary_kr IS NOT NULL
+              AND summary_kr <> ''
               AND disclosed_at AT TIME ZONE 'Asia/Seoul' >= :start_date
               AND disclosed_at AT TIME ZONE 'Asia/Seoul' <= :end_date
             ORDER BY disclosed_at, id
@@ -110,13 +123,15 @@ def summarize_disclosure_events_batch_dag():
             result = conn.execute(
                 sa.text(sql), {"start_date": start_date, "end_date": end_date}
             )
-            events = [{"id": row.id, "raw": row.raw} for row in result]
-            print(f"Fetched {len(events)} events for period {start_date} to {end_date}")
+            events = [{"id": row.id, "summary_kr": row.summary_kr} for row in result]
+            print(
+                f"Fetched {len(events)} events for masking period {start_date} to {end_date}"
+            )
             return events
 
-    # ④ JSONL 파일 작성 & OpenAI 업로드(월별)
-    @task(task_id="upload_batch_file")
-    def upload_batch_file(events: list[dict]) -> str | None:
+    # ④ JSONL 파일 작성 & OpenAI 업로드(월별) - 마스킹용
+    @task(task_id="upload_masking_batch_file")
+    def upload_masking_batch_file(events: list[dict]) -> str | None:
         if not events:
             return None
 
@@ -131,8 +146,8 @@ def summarize_disclosure_events_batch_dag():
                     "body": {
                         "model": MODEL,
                         "messages": [
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": ev["raw"]},
+                            {"role": "system", "content": MASKING_SYSTEM_PROMPT},
+                            {"role": "user", "content": ev["summary_kr"]},
                         ],
                     },
                 }
@@ -141,26 +156,25 @@ def summarize_disclosure_events_batch_dag():
             file_resp = client.files.create(file=open(fp.name, "rb"), purpose="batch")
         return file_resp.id
 
-    # ⑤ Batch Job 생성(월별)
-    @task(task_id="create_batch_job")
-    def create_batch_job(file_id: str | None) -> str | None:
+    # ⑤ 배치 작업 생성, 완료 대기 & 결과 다운로드(월별) - 마스킹용
+    @task(task_id="process_masking_batch", max_active_tis_per_dag=1)
+    def process_masking_batch(
+        file_id: str | None, poll_interval: int = 30
+    ) -> list[dict]:
+        """배치 작업을 생성하고 완료될 때까지 대기한 후 결과를 다운로드"""
         if file_id is None:
-            return None
+            return []
+
+        # 배치 작업 생성
         batch = client.batches.create(
             input_file_id=file_id,
             endpoint="/v1/chat/completions",
             completion_window="24h",
         )
-        return batch.id
+        batch_id = batch.id
+        print(f"Created batch job: {batch_id}")
 
-    # ⑥ 완료 대기 & 결과 다운로드(월별)
-    @task(task_id="wait_and_download_batch")
-    def wait_and_download_batch(
-        batch_id: str | None, poll_interval: int = 30
-    ) -> list[dict]:
-        if batch_id is None:
-            return []
-
+        # 완료 대기
         while True:
             batch = client.batches.retrieve(batch_id)
             if batch.status in {"completed", "failed", "expired"}:
@@ -171,6 +185,7 @@ def summarize_disclosure_events_batch_dag():
             print(f"Batch failed with status: {batch.status}")
             return []
 
+        # 결과 다운로드
         output_file_id: str | None = batch.output_file_id
         if not output_file_id:
             print("No output file found")
@@ -188,7 +203,7 @@ def summarize_disclosure_events_batch_dag():
                     if obj["response"]["body"]["choices"]
                     else None
                 )
-                ok.append({"id": cid, "summary": content})
+                ok.append({"id": cid, "masked": content})
             else:
                 failed.append(
                     {
@@ -201,28 +216,50 @@ def summarize_disclosure_events_batch_dag():
         if failed:
             print(f"{len(failed)} requests failed/rejected → 첫 3건: {failed[:3]}")
 
-        print(f"Successfully processed {len(ok)} summaries")
+        print(f"Successfully processed {len(ok)} masked texts")
         return ok
 
-    # ⑦ DB 업데이트(월별)
-    @task(task_id="update_summaries")
-    def update_summarize(summaries: list[dict]) -> None:
-        if not summaries:
-            print("No summaries to update")
+    # ⑦ 마스킹된 데이터를 label 테이블에 저장(월별)
+    @task(task_id="save_masked_data")
+    def save_masked_data(masked_results: list[dict]) -> None:
+        if not masked_results:
+            print("No masked data to save")
             return
+
+        # 원본 summary_kr 데이터도 함께 가져와서 저장
         with ENGINE.begin() as conn:
-            for s in summaries:
-                conn.execute(
-                    sa.text(
-                        """
-                        UPDATE disclosure_events
-                           SET summary_kr = :summary
-                         WHERE id = :id
-                        """
-                    ),
-                    {"summary": s["summary"], "id": s["id"]},
-                )
-        print(f"Updated {len(summaries)} rows.")
+            for result in masked_results:
+                # 원본 summary_kr 가져오기
+                original_sql = """
+                    SELECT summary_kr FROM disclosure_events WHERE id = :id
+                """
+                original_result = conn.execute(
+                    sa.text(original_sql), {"id": result["id"]}
+                ).fetchone()
+
+                if original_result:
+                    # label 테이블에 데이터 저장 (UPSERT)
+                    upsert_sql = """
+                        INSERT INTO label (id, summary_kr, masked, label)
+                        VALUES (:id, :summary_kr, :masked, :label)
+                        ON CONFLICT (id) 
+                        DO UPDATE SET 
+                            summary_kr = EXCLUDED.summary_kr,
+                            masked = EXCLUDED.masked,
+                            label = EXCLUDED.label,
+                            created_at = CURRENT_TIMESTAMP
+                    """
+                    conn.execute(
+                        sa.text(upsert_sql),
+                        {
+                            "id": result["id"],
+                            "summary_kr": original_result.summary_kr,
+                            "masked": result["masked"],
+                            "label": None,  # 라벨 필드에 마스킹 여부 표시
+                        },
+                    )
+
+        print(f"Saved {len(masked_results)} masked records to label table.")
 
     # 템플릿으로 문자열 파라미터 주입
     month_ranges = build_month_ranges(
@@ -231,15 +268,14 @@ def summarize_disclosure_events_batch_dag():
     )
 
     # ✅ 리스트[dict]를 매핑할 때는 expand_kwargs 사용
-    evts = fetch_events_to_summarize.expand_kwargs(month_ranges)
-    file_id = upload_batch_file.expand(events=evts)
-    batch_id = create_batch_job.expand(file_id=file_id)
-    summaries = wait_and_download_batch.expand(batch_id=batch_id)
-    upd = update_summarize.expand(summaries=summaries)
+    evts = fetch_events_to_mask.expand_kwargs(month_ranges)
+    file_id = upload_masking_batch_file.expand(events=evts)
+    masked_results = process_masking_batch.expand(file_id=file_id)
+    save_results = save_masked_data.expand(masked_results=masked_results)
 
     # 의존성 설정
-    month_ranges >> evts >> file_id >> batch_id >> summaries >> upd
+    (month_ranges >> evts >> file_id >> masked_results >> save_results)
 
 
 # DAG 인스턴스 (기본 기간은 예시, 트리거 시 파라미터로 바꿔도 됨)
-summarize_dag = summarize_disclosure_events_batch_dag()
+masking_dag = mask_disclosure_events_batch_dag()
