@@ -78,7 +78,7 @@ def collect_target_dates(year_month: str, market: str) -> list[str]:
 )
 def parquet_to_ohlcv_total_dag():
 
-    @task
+    @task(max_active_tis_per_dag=1)
     def convert(market: str, target_year_month: str) -> list[str]:
         target_dates = collect_target_dates(target_year_month, market)
 
@@ -171,9 +171,10 @@ def parquet_to_ohlcv_total_dag():
 
     # ── DAG wiring (expand) ───────────────────────────────────────────────
     print("[DEBUG] DAG 실행 시작")
-    markets = ["KOSDAQ"]
+    markets = ["KOSPI", "KOSDAQ"]
     target_year_month_list = [
-        "2023_07",
+        "2023_11",
+        "2023_12",
     ]
 
     convert.expand(market=markets, target_year_month=target_year_month_list)
