@@ -33,13 +33,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 마스킹을 위한 시스템 프롬프트
-MASKING_SYSTEM_PROMPT = (
-    "당신은 한국 기업 공시 텍스트에서 구체적인 회사명을 마스킹하는 작업을 수행합니다. "
-    "텍스트에서 언급된 모든 회사명을 '회사 A', '회사 B', '회사 C' 등의 형태로 순서대로 마스킹해주세요. "
-    "같은 회사가 여러 번 언급되면 동일한 마스킹을 사용하세요. "
-    "마스킹된 텍스트만 반환하고 다른 설명은 하지 마세요."
-)
-MODEL = "gpt-4.1-nano"
+MASKING_SYSTEM_PROMPT = "You will perform the task of masking specific company names in Korean corporate disclosure texts. Replace every company name mentioned in the text with 'Company A', 'Company B', 'Company C', and so on in order. If the same company is mentioned multiple times, use the same masking consistently. Return only the masked text without any further explanation."
+MODEL = "gpt-5-nano"
 
 
 @dag(
@@ -55,7 +50,7 @@ def mask_disclosure_events_batch_dag():
     """일괄 Batch 마스킹 DAG (월 단위 청크 처리)"""
 
     @task(task_id="create_label_table")
-    def create_label_table() -> None:
+    def create_label_table_if_not_exists() -> None:
         """label 테이블이 없으면 생성"""
         sql = """
             CREATE TABLE IF NOT EXISTS label (
@@ -63,7 +58,7 @@ def mask_disclosure_events_batch_dag():
                 summary_kr TEXT,
                 masked TEXT,
                 label INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                disclosed_at TIMESTAMP
             )
         """
         with ENGINE.begin() as conn:
@@ -110,7 +105,7 @@ def mask_disclosure_events_batch_dag():
     ) -> list[dict]:
         """events 테이블에서 summary_kr이 있는 데이터를 가져와서 마스킹 처리"""
         sql = """
-            SELECT id, summary_kr
+            SELECT id, summary_kr, disclosed_at
             FROM disclosure_events
             WHERE summary_kr IS NOT NULL
               AND summary_kr <> ''
@@ -123,7 +118,14 @@ def mask_disclosure_events_batch_dag():
             result = conn.execute(
                 sa.text(sql), {"start_date": start_date, "end_date": end_date}
             )
-            events = [{"id": row.id, "summary_kr": row.summary_kr} for row in result]
+            events = [
+                {
+                    "id": row.id,
+                    "summary_kr": row.summary_kr,
+                    "disclosed_at": row.disclosed_at,
+                }
+                for row in result
+            ]
             print(
                 f"Fetched {len(events)} events for masking period {start_date} to {end_date}"
             )
@@ -227,9 +229,9 @@ def mask_disclosure_events_batch_dag():
         # 원본 summary_kr 데이터도 함께 가져와서 저장
         with ENGINE.begin() as conn:
             for result in masked_results:
-                # 원본 summary_kr 가져오기
+                # 원본 summary_kr과 disclosed_at 가져오기
                 original_sql = """
-                    SELECT summary_kr FROM disclosure_events WHERE id = :id
+                    SELECT summary_kr, disclosed_at FROM disclosure_events WHERE id = :id
                 """
                 original_result = conn.execute(
                     sa.text(original_sql), {"id": result["id"]}
@@ -238,14 +240,14 @@ def mask_disclosure_events_batch_dag():
                 if original_result:
                     # label 테이블에 데이터 저장 (UPSERT)
                     upsert_sql = """
-                        INSERT INTO label (id, summary_kr, masked, label)
-                        VALUES (:id, :summary_kr, :masked, :label)
+                        INSERT INTO label (id, summary_kr, masked, label, disclosed_at)
+                        VALUES (:id, :summary_kr, :masked, :label, :disclosed_at)
                         ON CONFLICT (id) 
                         DO UPDATE SET 
                             summary_kr = EXCLUDED.summary_kr,
                             masked = EXCLUDED.masked,
                             label = EXCLUDED.label,
-                            created_at = CURRENT_TIMESTAMP
+                            disclosed_at = EXCLUDED.disclosed_at
                     """
                     conn.execute(
                         sa.text(upsert_sql),
@@ -254,6 +256,7 @@ def mask_disclosure_events_batch_dag():
                             "summary_kr": original_result.summary_kr,
                             "masked": result["masked"],
                             "label": None,  # 라벨 필드에 마스킹 여부 표시
+                            "disclosed_at": original_result.disclosed_at,
                         },
                     )
 
@@ -276,12 +279,13 @@ def mask_disclosure_events_batch_dag():
     )
 
     # ✅ 리스트[dict]를 매핑할 때는 expand_kwargs 사용
+    create_table_task = create_label_table_if_not_exists()
     evts = fetch_events_to_mask.expand_kwargs(month_ranges)
     file_id = upload_masking_batch_file.expand(events=evts)
     process_and_save_results = process_and_save_masking.expand(file_id=file_id)
 
     # 의존성 설정
-    (month_ranges >> evts >> file_id >> process_and_save_results)
+    (create_table_task >> month_ranges >> evts >> file_id >> process_and_save_results)
 
 
 # DAG 인스턴스 (기본 기간은 예시, 트리거 시 파라미터로 바꿔도 됨)

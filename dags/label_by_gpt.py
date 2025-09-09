@@ -33,13 +33,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 라벨링을 위한 시스템 프롬프트
-LABELING_SYSTEM_PROMPT = (
-    "당신은 한국 기업 공시 텍스트를 분석하여 해당 공시가 발표된 후 주가에 미칠 영향을 판단하는 작업을 수행합니다. "
-    "공시 내용을 분석하여 주가에 긍정적인 영향을 미칠 것으로 예상되면 '0', "
-    "중립적인 영향을 미칠 것으로 예상되면 '1', "
-    "부정적인 영향을 미칠 것으로 예상되면 '2'로 응답해주세요. "
-    "숫자만 반환하고 다른 설명은 하지 마세요."
-)
+LABELING_SYSTEM_PROMPT = "You will analyze Korean corporate disclosure texts to determine the expected impact on stock prices after the disclosure. If the disclosure is expected to have a positive impact on stock prices, respond with '0'. If it is expected to have a neutral impact, respond with '1'. If it is expected to have a negative impact, respond with '2'. Return only the number without any further explanation."
 MODEL = "gpt-5-nano"
 
 
