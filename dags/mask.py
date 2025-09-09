@@ -33,7 +33,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 마스킹을 위한 시스템 프롬프트
-MASKING_SYSTEM_PROMPT = "You will perform the task of masking specific company names in Korean corporate disclosure texts. Replace every company name mentioned in the text with 'Company A', 'Company B', 'Company C', and so on in order. If the same company is mentioned multiple times, use the same masking consistently. Return only the masked text without any further explanation."
+MASKING_SYSTEM_PROMPT = (
+    "당신은 한국 기업 공시 텍스트에서 구체적인 회사명을 마스킹하는 작업을 수행합니다. "
+    "텍스트에서 언급된 모든 회사명을 '회사 A', '회사 B', '회사 C' 등의 형태로 순서대로 마스킹해주세요. "
+    "같은 회사가 여러 번 언급되면 동일한 마스킹을 사용하세요. "
+    "마스킹된 텍스트만 반환하고 다른 설명은 하지 마세요."
+)
 MODEL = "gpt-5-nano"
 
 
