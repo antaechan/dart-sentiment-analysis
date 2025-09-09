@@ -49,7 +49,7 @@ MODEL = "gpt-4.1-nano"
     tags=["openai", "masking", "batch"],
     max_active_tasks=1,
     # DAG 기본 파라미터는 문자열로! (JSON-serializable)
-    params={"start_date": "2022-07-01", "end_date": "2023-12-31"},
+    params={"start_date": "2023-07-01", "end_date": "2023-12-31"},
 )
 def mask_disclosure_events_batch_dag():
     """일괄 Batch 마스킹 DAG (월 단위 청크 처리)"""
@@ -157,7 +157,6 @@ def mask_disclosure_events_batch_dag():
         return file_resp.id
 
     # ⑤ 배치 작업 생성, 완료 대기 & 결과 다운로드(월별) - 마스킹용
-    @task(task_id="process_masking_batch", max_active_tis_per_dag=1)
     def process_masking_batch(
         file_id: str | None, poll_interval: int = 30
     ) -> list[dict]:
@@ -220,7 +219,6 @@ def mask_disclosure_events_batch_dag():
         return ok
 
     # ⑦ 마스킹된 데이터를 label 테이블에 저장(월별)
-    @task(task_id="save_masked_data")
     def save_masked_data(masked_results: list[dict]) -> None:
         if not masked_results:
             print("No masked data to save")
@@ -261,6 +259,16 @@ def mask_disclosure_events_batch_dag():
 
         print(f"Saved {len(masked_results)} masked records to label table.")
 
+    # ⑧ 마스킹 배치 처리와 저장을 하나의 task로 묶은 함수
+    @task(task_id="process_and_save_masking", max_active_tis_per_dag=1)
+    def process_and_save_masking(file_id: str | None, poll_interval: int = 30) -> None:
+        """process_masking_batch와 save_masked_data를 하나의 task로 묶은 함수"""
+        # 1. process_masking_batch 실행
+        masked_results = process_masking_batch(file_id, poll_interval)
+
+        # 2. save_masked_data 실행
+        save_masked_data(masked_results)
+
     # 템플릿으로 문자열 파라미터 주입
     month_ranges = build_month_ranges(
         start_date_str="{{ params.start_date }}",
@@ -270,11 +278,10 @@ def mask_disclosure_events_batch_dag():
     # ✅ 리스트[dict]를 매핑할 때는 expand_kwargs 사용
     evts = fetch_events_to_mask.expand_kwargs(month_ranges)
     file_id = upload_masking_batch_file.expand(events=evts)
-    masked_results = process_masking_batch.expand(file_id=file_id)
-    save_results = save_masked_data.expand(masked_results=masked_results)
+    process_and_save_results = process_and_save_masking.expand(file_id=file_id)
 
     # 의존성 설정
-    (month_ranges >> evts >> file_id >> masked_results >> save_results)
+    (month_ranges >> evts >> file_id >> process_and_save_results)
 
 
 # DAG 인스턴스 (기본 기간은 예시, 트리거 시 파라미터로 바꿔도 됨)
