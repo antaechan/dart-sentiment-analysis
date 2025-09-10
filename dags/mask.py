@@ -49,7 +49,7 @@ MODEL = "gpt-5-nano"
     tags=["openai", "masking", "batch"],
     max_active_tasks=1,
     # DAG 기본 파라미터는 문자열로! (JSON-serializable)
-    params={"start_date": "2023-07-01", "end_date": "2023-12-31"},
+    params={"start_date": "2022-07-01", "end_date": "2023-06-30"},
 )
 def mask_disclosure_events_batch_dag():
     """일괄 Batch 마스킹 DAG (월 단위 청크 처리)"""
