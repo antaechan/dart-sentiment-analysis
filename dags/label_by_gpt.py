@@ -44,7 +44,7 @@ MODEL = "gpt-5-nano"
     tags=["openai", "labeling", "batch"],
     max_active_tasks=1,
     # DAG 기본 파라미터는 문자열로! (JSON-serializable)
-    params={"start_date": "2022-07-01", "end_date": "2023-12-31"},
+    params={"start_date": "2023-04-01", "end_date": "2023-04-30"},
 )
 def label_disclosure_events_by_gpt_batch_dag():
     """일괄 Batch GPT로 라벨링 DAG (월 단위 청크 처리)"""
@@ -137,7 +137,6 @@ def label_disclosure_events_by_gpt_batch_dag():
         return file_resp.id
 
     # ⑤ 배치 작업 생성, 완료 대기 & 결과 다운로드(월별) - 마스킹용
-    @task(task_id="process_masking_batch", max_active_tis_per_dag=2)
     def process_masking_batch(
         file_id: str | None, poll_interval: int = 30
     ) -> list[dict]:
@@ -200,7 +199,6 @@ def label_disclosure_events_by_gpt_batch_dag():
         return ok
 
     # ⑦ 라벨링된 데이터를 label 테이블에 저장(월별)
-    @task(task_id="save_labeled_data")
     def save_labeled_data(labeled_results: list[dict]) -> None:
         if not labeled_results:
             print("No labeled data to save")
@@ -218,6 +216,29 @@ def label_disclosure_events_by_gpt_batch_dag():
                 ).fetchone()
 
                 if original_result:
+                    # label 값이 정수인지 확인하고, 정수가 아니면 null로 처리
+                    label_value = result["label"]
+                    try:
+                        # 정수로 변환 시도
+                        if label_value and label_value.strip():
+                            int_label = int(label_value.strip())
+                            # 0, 1, 2 중 하나인지 확인
+                            if int_label not in [0, 1, 2]:
+                                print(
+                                    f"Invalid label value {int_label} for id {result['id']}, setting to null"
+                                )
+                                label_value = None
+                        else:
+                            print(
+                                f"Empty label value for id {result['id']}, setting to null"
+                            )
+                            label_value = None
+                    except (ValueError, TypeError):
+                        print(
+                            f"Non-integer label value '{label_value}' for id {result['id']}, setting to null"
+                        )
+                        label_value = None
+
                     # label 테이블에 데이터 저장 (UPSERT)
                     upsert_sql = """
                         INSERT INTO label (id, summary_kr, masked, label)
@@ -226,8 +247,7 @@ def label_disclosure_events_by_gpt_batch_dag():
                         DO UPDATE SET 
                             summary_kr = EXCLUDED.summary_kr,
                             masked = EXCLUDED.masked,
-                            label = EXCLUDED.label,
-                            created_at = CURRENT_TIMESTAMP
+                            label = EXCLUDED.label
                     """
                     conn.execute(
                         sa.text(upsert_sql),
@@ -235,11 +255,23 @@ def label_disclosure_events_by_gpt_batch_dag():
                             "id": result["id"],
                             "summary_kr": original_result.summary_kr,
                             "masked": original_result.masked,
-                            "label": result["label"],  # 라벨 필드에 라벨링 결과 저장
+                            "label": label_value,  # 검증된 라벨 값 저장
                         },
                     )
 
         print(f"Saved {len(labeled_results)} labeled records to label table.")
+
+    # ⑧ 통합 태스크: 배치 처리와 데이터 저장을 함께 수행
+    @task(task_id="process_and_save_masking_batch", max_active_tis_per_dag=2)
+    def process_and_save_masking_batch(
+        file_id: str | None, poll_interval: int = 30
+    ) -> None:
+        """배치 작업을 생성하고 완료될 때까지 대기한 후 결과를 다운로드하고 DB에 저장"""
+        # 배치 처리 수행
+        labeled_results = process_masking_batch(file_id, poll_interval)
+
+        # 결과를 DB에 저장
+        save_labeled_data(labeled_results)
 
     # 템플릿으로 문자열 파라미터 주입
     month_ranges = build_month_ranges(
@@ -250,11 +282,10 @@ def label_disclosure_events_by_gpt_batch_dag():
     # ✅ 리스트[dict]를 매핑할 때는 expand_kwargs 사용
     evts = fetch_masked_events.expand_kwargs(month_ranges)
     file_id = upload_masking_batch_file.expand(events=evts)
-    masked_results = process_masking_batch.expand(file_id=file_id)
-    save_results = save_labeled_data.expand(labeled_results=masked_results)
+    process_and_save_results = process_and_save_masking_batch.expand(file_id=file_id)
 
     # 의존성 설정
-    (month_ranges >> evts >> file_id >> masked_results >> save_results)
+    (month_ranges >> evts >> file_id >> process_and_save_results)
 
 
 # DAG 인스턴스 (기본 기간은 예시, 트리거 시 파라미터로 바꿔도 됨)
