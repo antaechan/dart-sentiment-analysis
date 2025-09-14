@@ -72,5 +72,7 @@ AI는 공시에 대해 긍정적으로 평가하는 비중이 높음(5: 2.5 : 2.5 정도의 비율)
 
 + 장 후도 데이터 처리, round 1, round 2, round 3, round4, round 5 이런 식으로
 
+close-intra 5min도 따로 처리
+
 
 
