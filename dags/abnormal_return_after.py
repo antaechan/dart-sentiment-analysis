@@ -16,15 +16,19 @@ load_dotenv()
 from config import KOSDAQ_OUT_DIR, KOSPI_OUT_DIR, TZ
 
 # 테이블 및 컬럼 설정
-TABLE_NAME = "abnormal_return"
+TABLE_NAME = "abnormal_return_after"
 ABN_RET_COLUMNS = {
-    10: "abn_ret_10m",
-    20: "abn_ret_20m",
-    30: "abn_ret_30m",
-    40: "abn_ret_40m",
-    50: "abn_ret_50m",
-    60: "abn_ret_60m",
+    1: "round1",  # 첫 번째 10분 단위 체결 (공시 발표 후 첫 번째 체결)
+    2: "round2",  # 두 번째 10분 단위 체결
+    3: "round3",  # 세 번째 10분 단위 체결
+    4: "round4",  # 네 번째 10분 단위 체결
+    5: "round5",  # 다섯 번째 10분 단위 체결
 }
+
+# 시간 범위 설정
+DISCLOSURE_START_HOUR = 16
+DISCLOSURE_END_HOUR = 18
+DISCLOSURE_END_MINUTE = 0
 
 # ─────────── DB 커넥션 ─────────────────────────────────────────────
 POSTGRES_USER = os.getenv("POSTGRES_USER")
@@ -42,6 +46,82 @@ ENGINE = sa.create_engine(DB_URL, pool_pre_ping=True, future=True)
 def to_min(dt):
     """초·마이크로초를 0으로 만들어 분 단위로 맞춘다."""
     return dt.replace(second=0, microsecond=0)
+
+
+def get_next_round_times(event_time: datetime) -> dict[int, datetime]:
+    """
+    공시 발표 시간 이후 시간외 단일가 매매 체결 시간들을 계산합니다.
+
+    시간외 단일가 매매는 4시~6시 사이에서 10분 단위로 체결됩니다:
+    - 4:10, 4:20, 4:30, 4:40, 4:50
+    - 5:00, 5:10, 5:20, 5:30, 5:40, 5:50
+
+    Args:
+        event_time: 공시 발표 시간
+
+    Returns:
+        {round_number: next_round_time} 딕셔너리
+    """
+    tz = zoneinfo.ZoneInfo(TZ)
+
+    # 시간외 단일가 매매 체결 시간들 (4시~6시, 10분 단위)
+    round_times = [
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 16:10",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 16:20",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 16:30",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 16:40",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 16:50",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 17:00",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 17:10",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 17:20",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 17:30",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 17:40",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+        datetime.strptime(
+            f"{event_time.year:04d}{event_time.month:02d}{event_time.day:02d} 17:50",
+            "%Y%m%d %H:%M",
+        ).replace(tzinfo=tz),
+    ]
+
+    # 공시 발표 시간 이후의 체결 시간들만 필터링
+    next_rounds = {}
+    round_number = 1
+
+    for round_time in round_times:
+        if round_time > event_time and round_number <= 5:  # 최대 5라운드까지만
+            next_rounds[round_number] = round_time
+            round_number += 1
+
+    return next_rounds
 
 
 def get_monthly_ranges(
@@ -80,17 +160,27 @@ def build_market_price_map_with_ffill(
 ) -> dict:
     """
     해당 날짜의 market 지수(KOSPI: KR7069500007, KOSDAQ: KR7229200001)의
-    1분 간격 가격 맵을 만든다.
+    시간외 단일가 매매 시간대(4시~6시)에서는 10분 단위로 체결되므로
+    해당 시간대에서는 10분 단위 타임스탬프를 생성하고 forward fill한다.
     """
     tz = zoneinfo.ZoneInfo(TZ)
 
-    # 1) 날짜 범위 (09:00 ~ 15:30, inclusive) 분단위 인덱스 생성
+    # 1) 날짜 범위 (지정된 시간 범위) 타임스탬프 인덱스 생성
     d = datetime.strptime(str(date_int), "%Y%m%d")
-    start = d.replace(hour=9, minute=0, second=0, microsecond=0, tzinfo=tz)
-    end = d.replace(hour=15, minute=20, second=0, microsecond=0, tzinfo=tz)
+    start = d.replace(
+        hour=DISCLOSURE_START_HOUR, minute=0, second=0, microsecond=0, tzinfo=tz
+    )
+    end = d.replace(
+        hour=DISCLOSURE_END_HOUR,
+        minute=DISCLOSURE_END_MINUTE,
+        second=0,
+        microsecond=0,
+        tzinfo=tz,
+    )
 
+    # 시간외 단일가 매매 시간대(4시~6시)에서는 10분 단위로만 체결
     ts_idx = pl.datetime_range(
-        start, end, interval="1m", time_unit="us", time_zone=TZ, eager=True
+        start, end, interval="10m", time_unit="us", time_zone=TZ, eager=True
     )
     idx_df = pl.DataFrame({"ts": ts_idx})
 
@@ -103,7 +193,7 @@ def build_market_price_map_with_ffill(
     if market_data.is_empty():
         return {}
 
-    # 4) 모든 분단위 ts와 left join 후 forward fill
+    # 4) 모든 10분 단위 ts와 left join 후 forward fill
     df = (
         idx_df.join(market_data, on="ts", how="left")
         .sort("ts")
@@ -121,25 +211,34 @@ def build_market_price_map_with_ffill(
 
 def build_price_map_with_ffill(ohlcv: pl.DataFrame, date_int: int) -> dict:
     """
-    해당 날짜(09:00~15:30, 1분 간격)의 모든 분 타임스탬프를 만들고,
-    종목별로 close를 forward fill하여 (code, ts) -> close 맵을 만든다.
+    해당 날짜의 시간외 단일가 매매 시간대(4시~6시)에서는 10분 단위로만 체결되므로
+    해당 시간대에서는 10분 단위 타임스탬프를 생성하고 종목별로 close를 forward fill한다.
     """
     tz = zoneinfo.ZoneInfo(TZ)
 
-    # 1) 날짜 범위 (09:00 ~ 15:30, inclusive) 분단위 인덱스 생성
+    # 1) 날짜 범위 (지정된 시간 범위) 타임스탬프 인덱스 생성
     d = datetime.strptime(str(date_int), "%Y%m%d")
-    start = d.replace(hour=9, minute=0, second=0, microsecond=0, tzinfo=tz)
-    end = d.replace(hour=15, minute=20, second=0, microsecond=0, tzinfo=tz)
+    start = d.replace(
+        hour=DISCLOSURE_START_HOUR, minute=0, second=0, microsecond=0, tzinfo=tz
+    )
+    end = d.replace(
+        hour=DISCLOSURE_END_HOUR,
+        minute=DISCLOSURE_END_MINUTE,
+        second=0,
+        microsecond=0,
+        tzinfo=tz,
+    )
 
+    # 시간외 단일가 매매 시간대(4시~6시)에서는 10분 단위로만 체결
     ts_idx = pl.datetime_range(
-        start, end, interval="1m", time_unit="us", time_zone=TZ, eager=True
+        start, end, interval="10m", time_unit="us", time_zone=TZ, eager=True
     )
     idx_df = pl.DataFrame({"ts": ts_idx})
 
     # 2) ts를 TZ-aware로 맞추기 (parquet이 naive면 timezone 부여)
     ohlcv = ohlcv.with_columns(pl.col("ts").dt.replace_time_zone(TZ))
 
-    # 3) 종목코드 × 모든 분단위 ts 생성(크로스 조인) 후 원본과 left join
+    # 3) 종목코드 × 모든 10분 단위 ts 생성(크로스 조인) 후 원본과 left join
     codes = ohlcv.select("code").unique()
     full_grid = codes.join(idx_df, how="cross")
 
@@ -200,7 +299,7 @@ def event_reaction_returns_dag():
     def fetch_events_monthly(start_date: datetime, end_date: datetime) -> list[dict]:
         """
         지정된 월 범위의 disclosure_events 중,
-        * 발표 시각이 국내 장중(09:00~15:30, KST) 사이에 발생했고
+        * 발표 시각이 지정된 시간 범위 (KST) 사이에 발생했고
         * OHLCV Parquet 파일이 존재하는 날짜만 반환
         반환 형식: [{'event_id': …, 'ts': datetime, 'code': str, 'market': str}, …]
         """
@@ -215,19 +314,23 @@ def event_reaction_returns_dag():
             WHERE stock_code IS NOT NULL
               AND disclosed_at IS NOT NULL
               AND market IN ('KOSPI', 'KOSDAQ', 'KOSDAQ GLOBAL')
-              -- 09:00~15:30 사이 공시만 (KST 기준)
+              -- 지정된 시간 범위 사이 공시만 (KST 기준)
               AND (
-                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 9 AND 14)
-                  OR
-                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 15
-                   AND EXTRACT(MINUTE FROM disclosed_at AT TIME ZONE 'Asia/Seoul') <= 20)
+                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN %(start_hour)s AND %(end_hour)s)
               )
               -- 월별 범위 필터링
               AND disclosed_at >= %(start_date)s
               AND disclosed_at <= %(end_date)s
             """
             df = pd.read_sql(
-                sql, conn, params={"start_date": start_date, "end_date": end_date}
+                sql,
+                conn,
+                params={
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "start_hour": DISCLOSURE_START_HOUR,
+                    "end_hour": DISCLOSURE_END_HOUR - 1,  # BETWEEN은 양끝 포함이므로 -1
+                },
             )
 
         if df.empty:
@@ -381,15 +484,26 @@ def event_reaction_returns_dag():
         updates = []
 
         for ev in events:
-            ts0 = to_min(
-                datetime.fromisoformat(ev["event_ts"]).replace(
-                    tzinfo=zoneinfo.ZoneInfo(TZ)
-                )
+            event_time = datetime.fromisoformat(ev["event_ts"]).replace(
+                tzinfo=zoneinfo.ZoneInfo(TZ)
             )
+
+            # 공시 발표 시간 이후의 체결 시간들 계산
+            next_round_times = get_next_round_times(event_time)
+
+            if not next_round_times:
+                print(
+                    f"No valid round times found for event {ev['event_id']} at {event_time}"
+                )
+                continue
+
+            # 공시 발표 시간의 가격 (기준점)
+            ts0 = to_min(event_time)
             p0 = price_map.get((ev["stock_code"], ts0))
             market_p0 = market_price_map.get(ts0)
 
             print(f"ev: {ev}, ts0: {ts0}, p0: {p0}, market_p0: {market_p0}")
+            print(f"Next round times: {next_round_times}")
 
             if p0 is None or p0 == 0 or market_p0 is None or market_p0 == 0:
                 continue
@@ -401,18 +515,23 @@ def event_reaction_returns_dag():
                 "market": ev["market"],
             }
 
-            for lag in ABN_RET_COLUMNS.keys():
-                p_lag = price_map.get((ev["stock_code"], ts0 + timedelta(minutes=lag)))
-                market_p_lag = market_price_map.get(ts0 + timedelta(minutes=lag))
+            # 각 라운드별로 abnormal return 계산
+            for round_num, round_time in next_round_times.items():
+                round_ts = to_min(round_time)
+                p_round = price_map.get((ev["stock_code"], round_ts))
+                market_p_round = market_price_map.get(round_ts)
 
-                if p_lag and market_p_lag:
+                if p_round and market_p_round:
                     # 개별 수익률 계산
-                    stock_return = (p_lag / p0 - 1.0) * 100.0
+                    stock_return = (p_round / p0 - 1.0) * 100.0
                     # market 수익률 계산
-                    market_return = (market_p_lag / market_p0 - 1.0) * 100.0
+                    market_return = (market_p_round / market_p0 - 1.0) * 100.0
                     # abnormal return = 개별 수익률 - market 수익률
                     abnormal_return = stock_return - market_return
-                    rec[ABN_RET_COLUMNS[lag]] = round(abnormal_return, 2)
+                    rec[ABN_RET_COLUMNS[round_num]] = round(abnormal_return, 2)
+                    print(
+                        f"Round {round_num} ({round_time}): stock_return={stock_return:.2f}%, market_return={market_return:.2f}%, abnormal_return={abnormal_return:.2f}%"
+                    )
 
             # ★ 계산된 abnormal return이 하나라도 있을 때만 삽입
             if any(k in rec for k in ABN_RET_COLUMNS.values()):
