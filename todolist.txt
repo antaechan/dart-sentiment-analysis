@@ -75,4 +75,9 @@ AI는 공시에 대해 긍정적으로 평가하는 비중이 높음(5: 2.5 : 2.5 정도의 비율)
 close-intra 5min도 따로 처리
 
 
+trade_on, trade_off, spdlog::debug로 처리
+
+
+
+
 

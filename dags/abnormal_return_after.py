@@ -264,7 +264,7 @@ def build_price_map_with_ffill(ohlcv: pl.DataFrame, date_int: int) -> dict:
     tags=["ticks", "event_returns"],
     max_active_tasks=1,
 )
-def event_reaction_returns_dag():
+def event_reaction_returns_after_dag():
     @task
     def create_table_if_not_exists() -> None:
         """
@@ -553,4 +553,4 @@ def event_reaction_returns_dag():
     create_table_task >> returns_task
 
 
-dag = event_reaction_returns_dag()
+dag = event_reaction_returns_after_dag()

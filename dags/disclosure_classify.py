@@ -135,7 +135,7 @@ REPORT_NAME_KEYWORD_MAPPING = {
     tags=["openai", "classification", "batch"],
     max_active_tasks=1,
     # DAG 기본 파라미터는 문자열로! (JSON-serializable)
-    params={"start_date": "2022-07-01", "end_date": "2023-12-31"},
+    params={"start_date": "2023-05-01", "end_date": "2023-12-31"},
 )
 def classify_disclosure_events_by_gpt_batch_dag():
     """일괄 Batch GPT로 공시 타입 분류 DAG (월 단위 청크 처리)"""
