@@ -72,7 +72,7 @@ DEFAULT_URL = os.environ.get(
 )
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/opt/airflow/dags/data")
 HEADLESS = os.environ.get("HEADLESS", "true").lower() != "false"
-MAX_PAGES = int(os.environ.get("MAX_PAGES", "5"))
+MAX_PAGES = int(os.environ.get("MAX_PAGES", "1000"))
 
 # Timeout configurations
 PAGE_LOAD_TIMEOUT = int(os.environ.get("PAGE_LOAD_TIMEOUT", "60"))
@@ -589,7 +589,7 @@ def kind_disclosure_crawl_dag():
 
             outfile = _crawl_kind_to_csv(
                 start_date="2021-01-01",
-                end_date="2022-06-30",
+                end_date="2021-06-30",
             )
             logging.info(f"CSV saved successfully to: {outfile}")
             print(f"CSV saved to: {outfile}")
