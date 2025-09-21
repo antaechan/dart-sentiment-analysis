@@ -78,6 +78,15 @@ close-intra 5min도 따로 처리
 trade_on, trade_off, spdlog::debug로 처리
 
 
+1. kind_table dart_url field, dart_recpt_no 추가 > 공시 발표 일자 + 고유 번호 조합으로 DART API 검색 > 나온 값이 2개 이상일 경우 처리 > 해당 dart url로 openAI API batch 요약???
 
 
+
+
+kind market, null 제외, 최초 발행(정정 제외)
+1. kind disclosure classification DART 기준에 맞춰서 라벨 추가(openAI API 사용해야 할 것 같음)
+2. 각 라벨별 API 모두 구현 > 정확히는 API별로 텔레그램 형식에 맞춰서 raw text 만듬
+3. kind_url > 텍스트 추출 > 이거 텍스트 길이를 보고... 텍스트 길이가 길지 않은 유형은 kind_url_extract_text로 커버
+4. 정기 실적 공시, 지분 공시 등은 dart-fss 등으로 커버
+5. AI Agent protocol도 가능...?
 

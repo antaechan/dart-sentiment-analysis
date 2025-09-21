@@ -295,7 +295,7 @@ def _click_search(driver: webdriver.Chrome):
 
 
 def _wait_results_table(driver: webdriver.Chrome):
-    time.sleep(5)
+    time.sleep(3)
     table_like = WebDriverWait(driver, 6).until(
         EC.presence_of_element_located(
             (
@@ -313,6 +313,33 @@ def _safe_text(el):
         return (el.text or "").strip()
     except Exception:
         return ""
+
+
+def _is_modify_disclosure(a_title_element) -> bool:
+    """
+    a_title 요소에서 정정 공시인지 확인합니다.
+    정정 공시는 <font color="#FF8040">[정정]</font> 패턴을 가집니다.
+
+    Args:
+        a_title_element: Selenium WebElement (a 태그)
+
+    Returns:
+        bool: 정정 공시이면 True, 아니면 False
+    """
+    try:
+        if not a_title_element:
+            return False
+
+        # HTML 소스를 가져와서 font 태그와 [정정] 텍스트가 있는지 확인
+        html_content = a_title_element.get_attribute("outerHTML") or ""
+
+        # 정정 공시 패턴 확인: <font> 태그 안에 [정정] 텍스트가 있는지
+        if "<font" in html_content and "[정정]" in html_content:
+            return True
+
+        return False
+    except Exception:
+        return False
 
 
 def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
@@ -373,6 +400,9 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
                 mdoc = re.search(r"openDisclsViewer\('([^']+)'", onclick_title)
                 disclosure_id = mdoc.group(1) if mdoc else ""
 
+                # 정정 공시 여부 확인
+                is_modify = 1 if _is_modify_disclosure(a_title) else 0
+
                 detail_url = f"https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno={disclosure_id}&docno=&viewerhost=&viewerport="
 
                 out.append(
@@ -391,6 +421,7 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
                         "title": title_txt,
                         "disclosure_id": disclosure_id,
                         "detail_url": detail_url,
+                        "is_modify": is_modify,
                     }
                 )
                 break  # 성공했으면 다음 행으로
@@ -588,8 +619,8 @@ def kind_disclosure_crawl_dag():
             logging.info(f"Max pages: {MAX_PAGES}")
 
             outfile = _crawl_kind_to_csv(
-                start_date="2021-01-01",
-                end_date="2021-06-30",
+                start_date="2022-06-01",
+                end_date="2022-06-30",
             )
             logging.info(f"CSV saved successfully to: {outfile}")
             print(f"CSV saved to: {outfile}")

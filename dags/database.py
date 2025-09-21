@@ -129,6 +129,7 @@ def create_kind_table_if_not_exists(engine: sa.engine.Engine) -> bool:
             summary_kr   TEXT,
             raw          TEXT,
             detail_url TEXT,
+            is_modify INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT uk_kind_disclosure_id UNIQUE (disclosure_id)
@@ -192,10 +193,10 @@ def _insert_rows_to_kind_table(engine, rows: List[dict]) -> None:
                 """
                 INSERT INTO kind (
                     disclosure_id, disclosed_at, company_name, stock_code, short_code,
-                    market, title, summary_kr, raw, detail_url
+                    market, title, summary_kr, raw, detail_url, is_modify
                 ) VALUES (
                     :disclosure_id, :disclosed_at, :company_name, :stock_code, :short_code,
-                    :market, :title, :summary_kr, :raw, :detail_url
+                    :market, :title, :summary_kr, :raw, :detail_url, :is_modify
                 )
                 ON CONFLICT (disclosure_id) DO UPDATE SET
                     disclosed_at = EXCLUDED.disclosed_at,
@@ -207,8 +208,9 @@ def _insert_rows_to_kind_table(engine, rows: List[dict]) -> None:
                     summary_kr = EXCLUDED.summary_kr,
                     raw = EXCLUDED.raw,
                     detail_url = EXCLUDED.detail_url,
+                    is_modify = EXCLUDED.is_modify,
                     updated_at = CURRENT_TIMESTAMP
-            """
+"""
             )
 
             # 데이터 준비 (없는 필드는 빈 문자열로)
@@ -234,6 +236,7 @@ def _insert_rows_to_kind_table(engine, rows: List[dict]) -> None:
                 "summary_kr": "",  # CSV에 없는 필드
                 "raw": "",  # CSV에 없는 필드
                 "detail_url": row.get("detail_url", ""),
+                "is_modify": row.get("is_modify", 0),  # 정정 공시 여부 (기본값: 0)
             }
 
             with engine.connect() as conn:
