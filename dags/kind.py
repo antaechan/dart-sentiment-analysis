@@ -1,6 +1,6 @@
 """
 Airflow DAG (TaskFlow API): Chrome(Selenium)으로 KIND 상세검색 페이지에 접속해
-'공시 발표 시간(접수/제출일시), 회사명(법인/제출인), 공시 제목(보고서명)'을 크롤링하여 CSV로 저장합니다.
+'공시 발표 시간(접수/제출일시), 회사명(법인/제출인), 공시 제목(보고서명)'을 크롤링하여 데이터베이스에 저장합니다.
 
 요구 사항
 - Airflow 2.x (TaskFlow API)
@@ -14,7 +14,6 @@ Airflow DAG (TaskFlow API): Chrome(Selenium)으로 KIND 상세검색 페이지�
 
 환경 변수(옵션)
   KIND_TARGET_URL : 기본값 'https://kind.krx.co.kr/disclosure/details.do?method=searchDetailsMain#viewer'
-  OUTPUT_DIR      : 기본값 '/opt/airflow/dags/data'
   HEADLESS        : 'true'/'false' (기본 true)
   MAX_PAGES       : 최대 페이지 크롤 수 (기본 5)
 
@@ -27,7 +26,6 @@ ARM64 (Apple Silicon/M1) 호환성 주의사항:
 
 from __future__ import annotations
 import os
-import csv
 import time
 import logging
 from datetime import datetime
@@ -70,7 +68,6 @@ DEFAULT_URL = os.environ.get(
     "KIND_TARGET_URL",
     "https://kind.krx.co.kr/disclosure/details.do?method=searchDetailsMain#viewer",
 )
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/opt/airflow/dags/data")
 HEADLESS = os.environ.get("HEADLESS", "true").lower() != "false"
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "1000"))
 
@@ -457,21 +454,18 @@ def _click_next_page(driver: webdriver.Chrome) -> bool:
         return False
 
 
-def _crawl_kind_to_csv(
+def _crawl_kind_to_database(
     target_url: Optional[str] = None,
-    output_dir: Optional[str] = None,
     max_pages: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> str:
 
     url = target_url or DEFAULT_URL
-    out_dir = output_dir or OUTPUT_DIR
     pages = max_pages or MAX_PAGES
 
     logging.info(f"=== Starting KIND crawling process ===")
     logging.info(f"Target URL: {url}")
-    logging.info(f"Output directory: {out_dir}")
     logging.info(f"Max pages: {pages}")
     logging.info(f"Date range: {start_date} ~ {end_date}")
 
@@ -479,9 +473,6 @@ def _crawl_kind_to_csv(
     engine = create_database_engine()
     create_kind_table_if_not_exists(engine)
     logging.info("Database connection established and kind table verified")
-
-    os.makedirs(out_dir, exist_ok=True)
-    logging.info(f"Output directory created/verified: {out_dir}")
 
     driver = _setup_driver()
     logging.info("WebDriver initialized successfully")
@@ -555,31 +546,8 @@ def _crawl_kind_to_csv(
         logging.info(f"Total pages processed: {page_count}")
         logging.info(f"Total rows collected: {len(all_rows)}")
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        outfile = os.path.join(out_dir, f"kind_disclosures_{ts}.csv")
-        logging.info(f"Preparing to save CSV to: {outfile}")
-
-        with open(outfile, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=[
-                    "disclosed_at",
-                    "company_name",
-                    "stock_code",
-                    "short_code",
-                    "market",
-                    "title",
-                    "disclosure_id",
-                    "detail_url",
-                ],
-            )
-            writer.writeheader()
-            for r in all_rows:
-                writer.writerow(r)
-
-        logging.info(f"CSV file saved successfully: {outfile}")
-        logging.info(f"File size: {os.path.getsize(outfile)} bytes")
-        return outfile
+        logging.info("All data has been saved to the database")
+        return f"Successfully processed {len(all_rows)} rows across {page_count} pages"
 
     except Exception as e:
         logging.error(f"Error during crawling process: {str(e)}")
@@ -602,7 +570,7 @@ local_tz = pendulum.timezone("Asia/Seoul")
 
 @dag(
     dag_id="kind_disclosure_crawl_dag",
-    description="KIND 상세검색에서 공시 발표시간/회사명/제목을 수집해 CSV로 저장 (TaskFlow)",
+    description="KIND 상세검색에서 공시 발표시간/회사명/제목을 수집해 데이터베이스에 저장 (TaskFlow)",
     start_date=pendulum.datetime(2025, 8, 1, tz=local_tz),
     schedule="@once",
     catchup=False,
@@ -610,26 +578,25 @@ local_tz = pendulum.timezone("Asia/Seoul")
 )
 def kind_disclosure_crawl_dag():
     @task()
-    def crawl_to_csv() -> str:
+    def crawl_to_database() -> str:
         try:
             logging.info("Starting KIND disclosure crawling...")
             logging.info(f"Target URL: {DEFAULT_URL}")
-            logging.info(f"Output directory: {OUTPUT_DIR}")
             logging.info(f"Headless mode: {HEADLESS}")
             logging.info(f"Max pages: {MAX_PAGES}")
 
-            outfile = _crawl_kind_to_csv(
-                start_date="2022-06-01",
-                end_date="2022-06-30",
+            result = _crawl_kind_to_database(
+                start_date="2022-01-01",
+                end_date="2022-05-31",
             )
-            logging.info(f"CSV saved successfully to: {outfile}")
-            print(f"CSV saved to: {outfile}")
-            return outfile
+            logging.info(f"Crawling completed: {result}")
+            print(f"Crawling completed: {result}")
+            return result
         except Exception as e:
             logging.error(f"Failed to crawl KIND disclosures: {str(e)}")
             raise e
 
-    crawl_to_csv()
+    crawl_to_database()
 
 
 dag = kind_disclosure_crawl_dag()
