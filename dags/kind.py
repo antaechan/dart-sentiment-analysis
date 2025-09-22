@@ -293,7 +293,7 @@ def _click_search(driver: webdriver.Chrome):
 
 def _wait_results_table(driver: webdriver.Chrome):
     time.sleep(2)
-    table_like = WebDriverWait(driver, 4).until(
+    table_like = WebDriverWait(driver, timeout=6).until(
         EC.presence_of_element_located(
             (
                 By.XPATH,
@@ -594,8 +594,8 @@ def kind_disclosure_crawl_dag():
             logging.info(f"Max pages: {MAX_PAGES}")
 
             result = _crawl_kind_to_database(
-                start_date="2021-07-01",
-                end_date="2021-12-31",
+                start_date="2021-01-01",
+                end_date="2021-06-30",
             )
             logging.info(f"Crawling completed: {result}")
             print(f"Crawling completed: {result}")
