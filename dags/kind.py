@@ -292,8 +292,8 @@ def _click_search(driver: webdriver.Chrome):
 
 
 def _wait_results_table(driver: webdriver.Chrome):
-    time.sleep(3)
-    table_like = WebDriverWait(driver, 6).until(
+    time.sleep(2)
+    table_like = WebDriverWait(driver, 4).until(
         EC.presence_of_element_located(
             (
                 By.XPATH,
@@ -344,6 +344,9 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
     out = []
     rows = driver.find_elements(By.CSS_SELECTOR, rows_sel)
     n = len(rows)
+
+    # 회사명 캐시를 위한 딕셔너리
+    company_cache = {}
 
     for i in range(n):  # 0..n-1
         for attempt in range(3):  # stale이면 최대 3회 재시도
@@ -402,18 +405,24 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
 
                 detail_url = f"https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno={disclosure_id}&docno=&viewerhost=&viewerport="
 
+                # 회사명 캐시 확인 및 사용
+                if company_name_txt not in company_cache:
+                    stock_code, short_code = get_stock_code_by_company_name(
+                        company_name_txt
+                    )
+                    company_cache[company_name_txt] = (
+                        stock_code or "",
+                        short_code or "",
+                    )
+
+                cached_stock_code, cached_short_code = company_cache[company_name_txt]
+
                 out.append(
                     {
                         "disclosed_at": disclosed_at,
                         "company_name": company_name_txt,
-                        "stock_code": get_stock_code_by_company_name(company_name_txt)[
-                            0
-                        ]
-                        or "",
-                        "short_code": get_stock_code_by_company_name(company_name_txt)[
-                            1
-                        ]
-                        or "",
+                        "stock_code": cached_stock_code,
+                        "short_code": cached_short_code,
                         "market": market,
                         "title": title_txt,
                         "disclosure_id": disclosure_id,
@@ -477,7 +486,8 @@ def _crawl_kind_to_database(
     driver = _setup_driver()
     logging.info("WebDriver initialized successfully")
 
-    all_rows: List[dict] = []
+    page_count = 0
+    total_rows = 0
     try:
         logging.info(f"Opening URL: {url}")
         driver.get(url)
@@ -504,7 +514,6 @@ def _crawl_kind_to_database(
         _wait_results_table(driver)
         logging.info("Results table found")
 
-        page_count = 0
         while True:
             logging.info(f"--- Processing page {page_count + 1} ---")
             _wait_results_table(driver)
@@ -519,16 +528,15 @@ def _crawl_kind_to_database(
                     logging.info(
                         f"Successfully inserted {len(rows)} rows to kind table"
                     )
+                    total_rows += len(rows)
                 except Exception as e:
                     logging.error(f"Failed to insert rows to kind table: {str(e)}")
 
             logging.info(f"Extracted {len(rows)} rows from page {page_count + 1}")
-
-            all_rows.extend(rows)
             page_count += 1
 
             logging.info(
-                f"Page {page_count}: Extracted {len(rows)} rows (Total: {len(all_rows)} rows)"
+                f"Page {page_count}: Extracted {len(rows)} rows (Total: {total_rows} rows)"
             )
 
             if page_count >= pages:
@@ -544,15 +552,15 @@ def _crawl_kind_to_database(
 
         logging.info(f"=== Crawling completed ===")
         logging.info(f"Total pages processed: {page_count}")
-        logging.info(f"Total rows collected: {len(all_rows)}")
+        logging.info(f"Total rows collected: {total_rows}")
 
         logging.info("All data has been saved to the database")
-        return f"Successfully processed {len(all_rows)} rows across {page_count} pages"
+        return f"Successfully processed {total_rows} rows across {page_count} pages"
 
     except Exception as e:
         logging.error(f"Error during crawling process: {str(e)}")
         logging.error(f"Current page count: {page_count}")
-        logging.error(f"Rows collected so far: {len(all_rows)}")
+        logging.error(f"Rows collected so far: {total_rows}")
         raise e
     finally:
         try:
@@ -586,8 +594,8 @@ def kind_disclosure_crawl_dag():
             logging.info(f"Max pages: {MAX_PAGES}")
 
             result = _crawl_kind_to_database(
-                start_date="2022-01-01",
-                end_date="2022-05-31",
+                start_date="2021-07-01",
+                end_date="2021-12-31",
             )
             logging.info(f"Crawling completed: {result}")
             print(f"Crawling completed: {result}")
