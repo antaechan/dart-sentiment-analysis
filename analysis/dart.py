@@ -131,6 +131,23 @@ def get_stock_acquisition(
     )
 
 
+def get_stock_sale(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> Dict[str, Any]:
+    """
+    타법인 주식 및 출자증권 양도결정 조회 (otcprStkInvscrTrfDecsn)
+    - corp_code: 8자리 고유번호
+    - bgn_de, end_de: YYYYMMDD
+    """
+    return send_dart_api(
+        "otcprStkInvscrTrfDecsn",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+
 def get_treasury_stock_trust(
     corp_code: Union[str, int],
     date: Union[str, int],
