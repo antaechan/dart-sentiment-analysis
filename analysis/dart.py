@@ -129,3 +129,51 @@ def get_stock_acquisition(
         bgn_de=date,
         end_de=date,
     )
+
+
+def get_treasury_stock_trust(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> Dict[str, Any]:
+    """
+    자기주식취득 신탁계약 체결 결정 조회
+    """
+
+    return send_dart_api(
+        "tsstkAqTrctrCnsDecsn",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+
+def get_treasury_stock_buy(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> Dict[str, Any]:
+    """
+    자기주식취득 신탁계약 체결 결정 조회
+    """
+
+    return send_dart_api(
+        "tsstkAqDecsn",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+
+def get_treasury_stock_sell(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> Dict[str, Any]:
+    """
+    자기주식처분 결정 조회
+    """
+
+    return send_dart_api(
+        "tsstkDpDecsn",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
