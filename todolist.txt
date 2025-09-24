@@ -100,3 +100,6 @@ kind market, null 제외, 최초 발행(정정 제외)
 5. (실적 공시, 지분 공시 처리 방법 생각)
 
 타법인주식 처분 결정(블록딜) 같은 경우 처분하는 회사를 고려해야 하는구나..., 취득도 마찬가지
+
+
+disclosure_type classification regex=True 활용해서 하기
