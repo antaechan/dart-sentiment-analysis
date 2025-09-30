@@ -44,7 +44,7 @@ def tick_to_parquet_dag():
             for p in KOSDAQ_RAW_DIR.iterdir()
             if p.suffix == ".dat" and patt.search(p.name)
         ]
-        return kosdaq
+        return kospi + kosdaq
 
     # ② CSV → 날짜별 Parquet 파티션
     @task(pool="parquet-writer", execution_timeout=timedelta(hours=12))
@@ -80,7 +80,24 @@ def tick_to_parquet_dag():
         return str(out_dir)
 
     # ── Dynamic task-mapping ──
-    convert.expand(file_path=get_files(year_month_list=["2023_07"]))
+    convert.expand(
+        file_path=get_files(
+            year_month_list=[
+                "2021_01",
+                "2021_02",
+                "2021_03",
+                "2021_04",
+                "2021_05",
+                "2021_06",
+                "2021_07",
+                "2021_08",
+                "2021_09",
+                "2021_10",
+                "2021_11",
+                "2021_12",
+            ]
+        )
+    )
 
 
 dag = tick_to_parquet_dag()
