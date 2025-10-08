@@ -2,8 +2,37 @@ import re
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+import time
+import random
 
-UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+# -------------------------
+# 공통 헤더/세션
+# -------------------------
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36"
+    ),
+    "Referer": "https://kind.krx.co.kr/",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.7",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+}
+
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
+
+# 요청 간 기본 딜레이(정중함) + 지터 범위
+_BASE_DELAY_SEC = 0.1  # 최소 대기
+_JITTER_SEC = 0.25  # 0 ~ 0.35초 랜덤 추가
+
+
+def _polite_pause():
+    """요청 사이에 기본 딜레이 + 지터."""
+    time.sleep(_BASE_DELAY_SEC + random.random() * _JITTER_SEC)
+
 
 # -------------------------
 # 인코딩 감지 & 디코딩
@@ -138,7 +167,8 @@ def _smart_text(
 
 
 def _get(url: str, timeout: int = 20, hint: str | None = None) -> str:
-    r = requests.get(url, timeout=timeout, headers=UA)
+    _polite_pause()
+    r = SESSION.get(url, timeout=timeout)
     r.raise_for_status()
     return _smart_text(r, fallback_domain_hint=hint or url)
 
@@ -267,7 +297,7 @@ def _fetch_iframe_text(viewer_html: str, viewer_url: str, timeout: int = 20) -> 
 # -------------------------
 # 최종 진입점
 # -------------------------
-def extract_disclosure_text(url: str, timeout: int = 20) -> str:
+def get_disclosure_supply(url: str, timeout: int = 20) -> str:
     viewer_html = fetch_viewer_html(url, timeout=timeout)
 
     if "kind.krx.co.kr" in url.lower():
