@@ -72,6 +72,7 @@ def format_table_performance_change(table: BeautifulSoup) -> str:
     """경영실적 변동에 맞게 tr/td 구조를 텍스트로 정제한다."""
     rows = table.find_all("tr")
     result = []
+    # print(rows)
 
     for row in rows:
         cols = [col.get_text(strip=True) for col in row.find_all("td")]
@@ -82,13 +83,12 @@ def format_table_performance_change(table: BeautifulSoup) -> str:
         if len(cols) == 2 and cols[0].startswith("1."):
             result.append(f"{cols[0]} : {cols[1]}")
         # 2. 매출액 또는 손익구조변동내용
-        elif len(cols) == 6 and cols[0].startswith("2."):
+        elif len(cols) == 5 and cols[0].startswith("2."):
             result.append(f"\n{cols[0]}")
         elif (
             len(cols) == 5
             and cols[0].startswith("- ")
-            and "매출액" in cols[0]
-            or "영업이익" in cols[0]
+            and ("매출액" in cols[0] or "영업이익" in cols[0])
         ):
             # 세부 항목 (매출액, 영업이익 등)
             item = cols[0].replace("- ", "")

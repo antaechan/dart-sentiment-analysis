@@ -226,22 +226,28 @@ def extract_table_content(html: str, table_formatter=None) -> str:
         추출된 텍스트
 
     처리 순서:
-        1) 테이블(id='XFormD1_Form0_Table0') 우선 검색
-        2) 없으면 첫 번째 <table> 대상으로 검색
-        3) 테이블이 있고 formatter가 제공되면 formatter 사용
-        4) 그래도 없거나 실패하면 전체 텍스트 추출(폴백)
+        1) 테이블(id='XFormD50_Form0_Table1') 최우선 검색
+        2) 없으면 테이블(id='XFormD1_Form0_Table0') 검색
+        3) 없으면 첫 번째 <table> 대상으로 검색
+        4) 테이블이 있고 formatter가 제공되면 formatter 사용
+        5) 그래도 없거나 실패하면 전체 텍스트 추출(폴백)
     """
     soup = BeautifulSoup(html, "lxml")
 
-    # 1) 명시 테이블 우선
-    table = soup.find("table", {"id": "XFormD1_Form0_Table0"})
+    # 1) XFormD50_Form0_Table1 최우선
+    table = soup.find("table", {"id": "XFormD50_Form0_Table1"})
+
+    # 2) XFormD1_Form0_Table0 차순위
     if not table:
-        # 2) 첫 번째 테이블 폴백
+        table = soup.find("table", {"id": "XFormD1_Form0_Table0"})
+
+    # 3) 첫 번째 테이블 폴백
+    if not table:
         all_tables = soup.find_all("table")
         if all_tables:
             table = all_tables[0]
 
-    # 3) 테이블이 있고 formatter가 제공되면 사용
+    # 4) 테이블이 있고 formatter가 제공되면 사용
     if table and table_formatter:
         try:
             return table_formatter(table)
@@ -249,7 +255,7 @@ def extract_table_content(html: str, table_formatter=None) -> str:
             # 테이블 파싱에 실패하면 아래 폴백으로
             pass
 
-    # 4) 테이블이 없거나 실패한 경우: 전체 텍스트 폴백
+    # 5) 테이블이 없거나 실패한 경우: 전체 텍스트 폴백
     return strip_tags_fallback(html)
 
 
