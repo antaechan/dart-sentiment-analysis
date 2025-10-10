@@ -1,3 +1,9 @@
+"""
+공시 크롤링 공통 유틸리티 함수들
+
+KIND, DART 등에서 공시 내용을 가져올 때 사용하는 공통 함수들을 제공합니다.
+"""
+
 import re
 import requests
 from bs4 import BeautifulSoup
@@ -38,79 +44,6 @@ def _polite_pause():
 # 인코딩 감지 & 디코딩
 # -------------------------
 _META_CHARSET_RE = re.compile(rb'charset\s*=\s*["\']?([\w\-]+)', re.I)
-
-
-def _normalize_cell_text(tag) -> str:
-    """셀 내부의 <br>를 줄바꿈으로 바꾸고, 앞뒤 공백/중복 개행 정리."""
-    # 태그 복사 없이 직접 치환
-    for br in tag.find_all("br"):
-        br.replace_with("\n")
-
-    txt = tag.get_text("\n", strip=True)
-    txt = re.sub(r"\r\n?", "\n", txt)
-    txt = re.sub(r"[ \t]+", " ", txt)
-    txt = re.sub(r"\n{3,}", "\n\n", txt)
-    return txt
-
-
-def _format_rows_from_table(table: BeautifulSoup) -> str:
-    """요구사항에 맞게 tr/td 구조를 텍스트로 정제한다."""
-    rows = table.find_all("tr")
-    output_lines = []
-
-    for tr in rows:
-        # td/th 모두 허용(간혹 th가 들어오는 공시가 있음)
-        cells = tr.find_all(["td", "th"])
-        if not cells:
-            continue
-
-        # 각 셀 텍스트 정규화
-        tds = [_normalize_cell_text(td) for td in cells]
-
-        # 첫 번째 셀은 메인 항목
-        main = tds[0].strip()
-        if not main:
-            # 메인 라벨이 비면 해당 행 스킵
-            continue
-
-        # 나머지 셀 처리 규칙
-        if len(tds) == 1:
-            # 단독 항목 행
-            output_lines.append(main)
-        elif len(tds) == 2:
-            # "항목: 값" 형태
-            output_lines.append(f"{main}: {tds[1]}")
-        else:
-            # 세부 칼럼 구조
-            details = []
-            # 두 번째 이후 셀들을 2개씩 묶어 "이름: 값"
-            i = 1
-            while i < len(tds):
-                name = tds[i]
-                value = ""
-                if i + 1 < len(tds):
-                    value = tds[i + 1]
-                    # 이름이 공백이거나 '-' 만 있을 수도 있음 → 그럴 땐 그냥 값만
-                    if name and name != "-":
-                        details.append(f"{name}: {value}")
-                    else:
-                        details.append(value)
-                    i += 2
-                else:
-                    # 마지막 홀수 개 남은 경우
-                    details.append(name)
-                    i += 1
-
-            # 메인 라벨 + 세부라인 묶기
-            if details:
-                output_lines.append(main)
-                output_lines.extend(details)
-            else:
-                # 혹시라도 details가 비면 메인만 출력
-                output_lines.append(main)
-
-    # 최종 합치기
-    return "\n".join(output_lines)
 
 
 def _smart_text(
@@ -166,37 +99,35 @@ def _smart_text(
         return raw.decode(enc or "utf-8", errors="replace")
 
 
-def _get(url: str, timeout: int = 20, hint: str | None = None) -> str:
+def get_url(url: str, timeout: int = 20, hint: str | None = None) -> str:
+    """URL에서 HTML을 가져옵니다. 인코딩을 자동으로 처리합니다."""
     _polite_pause()
     r = SESSION.get(url, timeout=timeout)
     r.raise_for_status()
     return _smart_text(r, fallback_domain_hint=hint or url)
 
 
-def _strip_tags(html: str) -> str:
+def normalize_cell_text(tag) -> str:
+    """셀 내부의 <br>를 줄바꿈으로 바꾸고, 앞뒤 공백/중복 개행 정리."""
+    # 태그 복사 없이 직접 치환
+    for br in tag.find_all("br"):
+        br.replace_with("\n")
+
+    txt = tag.get_text("\n", strip=True)
+    txt = re.sub(r"\r\n?", "\n", txt)
+    txt = re.sub(r"[ \t]+", " ", txt)
+    txt = re.sub(r"\n{3,}", "\n\n", txt)
+    return txt
+
+
+def strip_tags_fallback(html: str) -> str:
     """
-    1) 테이블(id='XFormD1_Form0_Table0') 우선 정제
-    2) 없으면 첫 번째 <table> 대상으로 정제
-    3) 그래도 없으면 전체 텍스트 추출(폴백)
+    테이블을 찾지 못했을 때 사용하는 폴백 로직.
+    전체 텍스트를 추출합니다.
     """
     soup = BeautifulSoup(html, "lxml")
 
-    # 1) 명시 테이블 우선
-    table = soup.find("table", {"id": "XFormD1_Form0_Table0"})
-    if not table:
-        # 2) 첫 번째 테이블 폴백
-        all_tables = soup.find_all("table")
-        if all_tables:
-            table = all_tables[0]
-
-    if table:
-        try:
-            return _format_rows_from_table(table)
-        except Exception:
-            # 테이블 파싱에 실패하면 아래 폴백으로
-            pass
-
-    # 3) 테이블이 없거나 실패한 경우: 전체 텍스트 폴백
+    # 불필요한 태그 제거
     for t in soup(["script", "style", "noscript"]):
         t.decompose()
     for br in soup.find_all("br"):
@@ -213,13 +144,15 @@ def _strip_tags(html: str) -> str:
 
 
 def fetch_viewer_html(url: str, timeout: int = 20) -> str:
-    return _get(url, timeout=timeout, hint=url)
+    """뷰어 페이지의 HTML을 가져옵니다."""
+    return get_url(url, timeout=timeout, hint=url)
 
 
 # -------------------------
 # KIND: acptNo/docNo → searchContents → setPath(...)에서 docLocPath 추출
 # -------------------------
-def _kind_pick_acpt_doc(viewer_html: str) -> tuple[str | None, str | None]:
+def kind_pick_acpt_doc(viewer_html: str) -> tuple[str | None, str | None]:
+    """KIND 뷰어 HTML에서 acptNo와 docNo를 추출합니다."""
     soup = BeautifulSoup(viewer_html, "lxml")
     acpt = None
     el = soup.select_one("#acptNo")
@@ -235,13 +168,14 @@ def _kind_pick_acpt_doc(viewer_html: str) -> tuple[str | None, str | None]:
     return acpt, doc
 
 
-def _kind_fetch_doclocpath(
+def kind_fetch_doclocpath(
     kind_base_url: str, doc_no: str, timeout: int = 20
 ) -> str | None:
+    """KIND에서 문서 경로를 가져옵니다."""
     sc_url = urljoin(
         kind_base_url, f"/common/disclsviewer.do?method=searchContents&docNo={doc_no}"
     )
-    text = _get(sc_url, timeout=timeout, hint=kind_base_url)
+    text = get_url(sc_url, timeout=timeout, hint=kind_base_url)
 
     # setPath('tocLocPath','docLocPath','server',...)
     m = re.search(r"setPath\(\s*['\"][^'\"]*['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*,", text)
@@ -254,18 +188,11 @@ def _kind_fetch_doclocpath(
     return m2.group(1).strip() if m2 else None
 
 
-def _kind_fetch_text_from_docloc(
-    kind_base_url: str, doc_loc_path: str, timeout: int = 20
-) -> str:
-    doc_url = urljoin(kind_base_url, doc_loc_path)
-    html = _get(doc_url, timeout=timeout, hint=kind_base_url)
-    return _strip_tags(html)
-
-
 # -------------------------
 # iframe 백업 로직 (DART/KIND 공통)
 # -------------------------
-def _find_iframe_src(viewer_html: str) -> str | None:
+def find_iframe_src(viewer_html: str) -> str | None:
+    """뷰어 HTML에서 iframe의 src를 찾습니다."""
     soup = BeautifulSoup(viewer_html, "lxml")
     iframe = soup.find("iframe", id="docViewFrm")
     if iframe:
@@ -285,30 +212,74 @@ def _find_iframe_src(viewer_html: str) -> str | None:
     return None
 
 
-def _fetch_iframe_text(viewer_html: str, viewer_url: str, timeout: int = 20) -> str:
-    src = _find_iframe_src(viewer_html)
-    if not src:
-        return ""
-    iframe_url = urljoin(viewer_url, src)
-    html = _get(iframe_url, timeout=timeout, hint=viewer_url)
-    return _strip_tags(html)
+def extract_table_content(html: str, table_formatter=None) -> str:
+    """
+    HTML에서 테이블을 찾아 텍스트로 변환합니다.
+
+    Args:
+        html: 파싱할 HTML 문자열
+        table_formatter: 테이블을 텍스트로 변환하는 함수.
+                        BeautifulSoup table 객체를 받아서 문자열을 반환해야 함.
+                        None이면 strip_tags_fallback을 바로 사용.
+
+    Returns:
+        추출된 텍스트
+
+    처리 순서:
+        1) 테이블(id='XFormD1_Form0_Table0') 우선 검색
+        2) 없으면 첫 번째 <table> 대상으로 검색
+        3) 테이블이 있고 formatter가 제공되면 formatter 사용
+        4) 그래도 없거나 실패하면 전체 텍스트 추출(폴백)
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    # 1) 명시 테이블 우선
+    table = soup.find("table", {"id": "XFormD1_Form0_Table0"})
+    if not table:
+        # 2) 첫 번째 테이블 폴백
+        all_tables = soup.find_all("table")
+        if all_tables:
+            table = all_tables[0]
+
+    # 3) 테이블이 있고 formatter가 제공되면 사용
+    if table and table_formatter:
+        try:
+            return table_formatter(table)
+        except Exception:
+            # 테이블 파싱에 실패하면 아래 폴백으로
+            pass
+
+    # 4) 테이블이 없거나 실패한 경우: 전체 텍스트 폴백
+    return strip_tags_fallback(html)
+
+
+def _kind_fetch_text_from_docloc(
+    kind_base_url: str, doc_loc_path: str, table_formatter=None, timeout: int = 20
+) -> str:
+    doc_url = urljoin(kind_base_url, doc_loc_path)
+    html = get_url(doc_url, timeout=timeout, hint=kind_base_url)
+    return extract_table_content(html, table_formatter=table_formatter)
 
 
 # -------------------------
 # 최종 진입점
 # -------------------------
-def get_disclosure_supply(url: str, timeout: int = 20) -> str:
+def extract_text(url: str, disclosure_type: str, timeout: int = 20) -> str:
+    # 순환 참조를 피하기 위해 여기서 import
+    from crawl import crawling_function_map
+
     viewer_html = fetch_viewer_html(url, timeout=timeout)
+    table_formatter = crawling_function_map[disclosure_type]
 
     if "kind.krx.co.kr" in url.lower():
-        acpt, doc = _kind_pick_acpt_doc(viewer_html)
+        acpt, doc = kind_pick_acpt_doc(viewer_html)
         if doc:
-            doc_loc = _kind_fetch_doclocpath(url, doc, timeout=timeout)
+            doc_loc = kind_fetch_doclocpath(url, doc, timeout=timeout)
             if doc_loc:
-                text = _kind_fetch_text_from_docloc(url, doc_loc, timeout=timeout)
+                text = _kind_fetch_text_from_docloc(
+                    url, doc_loc, table_formatter=table_formatter, timeout=timeout
+                )
                 if text and len(text) > 50:
                     return text
-        return _fetch_iframe_text(viewer_html, url, timeout=timeout)
 
-    # DART 등은 기본적으로 iframe 따라가기 (DART도 EUC-KR 페이지가 있음 → _get 사용)
-    return _fetch_iframe_text(viewer_html, url, timeout=timeout)
+    return ""
