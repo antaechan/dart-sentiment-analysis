@@ -53,6 +53,35 @@ def _normalize_date(yyyymmdd: Optional[Union[str, int]]) -> Optional[str]:
     return digits
 
 
+def _format_amount(amount_str: Optional[str]) -> str:
+    """금액을 '9,999원 (99.9억)' 형식으로 변환"""
+    if not amount_str or amount_str == "-":
+        return "-"
+    try:
+        amount = int(amount_str)
+        return f"{amount:,}원 ({amount/100000000:.1f}억)"
+    except:
+        return amount_str
+
+
+def _format_percent(percent_str: Optional[str]) -> str:
+    """퍼센트 값에 % 기호 추가"""
+    if not percent_str or percent_str == "-":
+        return "-"
+    return f"{percent_str}%"
+
+
+def _format_shares(shares_str: Optional[str]) -> str:
+    """주식 수를 '9,999주' 형식으로 변환"""
+    if not shares_str or shares_str == "-":
+        return "-"
+    try:
+        shares = int(shares_str)
+        return f"{shares:,}주"
+    except:
+        return shares_str
+
+
 def send_dart_api(
     disclosure_type: str,
     corp_code: Optional[Union[str, int]] = None,
@@ -117,6 +146,66 @@ def send_dart_api(
         return {"status": "UNKNOWN_ERROR", "message": f"알 수 없는 오류: {e}"}
 
 
+def get_paid_in_capital_increase(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> str:
+    """
+    유상증자 결정 조회
+    - corp_code: 8자리 고유번호
+    - date: YYYYMMDD
+    """
+    data = send_dart_api(
+        "유상증자 결정",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+    lines = []
+    if not data or data.get("status") != "000" or not data.get("list"):
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
+
+    inc_info = data["list"][0]
+
+    lines.append("유상증자 발행정보")
+    lines.append("=" * 20)
+    lines.append(f"회사명: {inc_info.get('corp_name', '-')}")
+    lines.append(f"법인구분: {inc_info.get('corp_cls', '-')}")
+    lines.append(f"이사회결의일: {inc_info.get('bddd', '-')}")
+    lines.append("")
+
+    lines.append("신주 종류 및 수")
+    lines.append(f"  보통주식(주): {_format_shares(inc_info.get('nstk_ostk_cnt'))}")
+    lines.append(f"  기타주식(주): {_format_shares(inc_info.get('nstk_estk_cnt'))}")
+    lines.append(f"1주당 액면가액(원): {_format_amount(inc_info.get('fv_ps'))}")
+    lines.append("")
+
+    lines.append("증자전 발행주식총수")
+    lines.append(f"  보통주식(주): {_format_shares(inc_info.get('bfic_tisstk_ostk'))}")
+    lines.append(f"  기타주식(주): {_format_shares(inc_info.get('bfic_tisstk_estk'))}")
+    lines.append("")
+
+    lines.append("자금조달의 목적")
+    lines.append(f"  시설자금(원): {_format_amount(inc_info.get('fdpp_fclt'))}")
+    lines.append(f"  영업양수자금(원): {_format_amount(inc_info.get('fdpp_bsninh'))}")
+    lines.append(f"  운영자금(원): {_format_amount(inc_info.get('fdpp_op'))}")
+    lines.append(f"  채무상환자금(원): {_format_amount(inc_info.get('fdpp_dtrp'))}")
+    lines.append(
+        f"  타법인증권 취득자금(원): {_format_amount(inc_info.get('fdpp_ocsa'))}"
+    )
+    lines.append(f"  기타자금(원): {_format_amount(inc_info.get('fdpp_etc'))}")
+    lines.append("")
+
+    lines.append("발행정보")
+    lines.append(f"증자방식: {inc_info.get('ic_mthn', '-')}")
+    lines.append(f"공매도해당여부: {inc_info.get('ssl_at', '-')}")
+    lines.append(f"공매도 시작일: {inc_info.get('ssl_bgd', '-')}")
+    lines.append(f"공매도 종료일: {inc_info.get('ssl_edd', '-')}")
+
+    return "\n".join(lines)
+
+
 def get_convertible_bond(
     corp_code: Union[str, int],
     date: Union[str, int],
@@ -139,49 +228,35 @@ def get_convertible_bond(
 
     bond_info = data["list"][0]
 
-    # 숫자, 퍼센트 변환 함수 모두 내부로 이동
-    def format_amount(amount_str):
-        if not amount_str or amount_str == "-":
-            return "-"
-        try:
-            amount = int(amount_str)
-            return f"{amount:,}원 ({amount/100000000:.1f}억)"
-        except:
-            return amount_str
-
-    def format_percent(percent_str):
-        if not percent_str or percent_str == "-":
-            return "-"
-        return f"{percent_str}%"
-
     lines.append(f"전환사채 발행정보")
-    lines.append("=" * 50)
+    lines.append("=" * 20)
     lines.append(f"회사명: {bond_info.get('corp_name', '-')}")
-    lines.append(f"접수번호: {bond_info.get('rcept_no', '-')}")
     lines.append(f"이사회결의일: {bond_info.get('bddd', '-')}")
     lines.append("")
 
     lines.append(f"발행정보")
     lines.append(f"사채종류: {bond_info.get('bd_knd', '-')}")
-    lines.append(f"발행금액: {format_amount(bond_info.get('bd_fta'))}")
+    lines.append(f"발행금액: {_format_amount(bond_info.get('bd_fta'))}")
     lines.append(f"발행방법: {bond_info.get('bdis_mthn', '-')}")
     lines.append(f"사채만기일: {bond_info.get('bd_mtd', '-')}")
     lines.append("")
 
     lines.append(f"이자율 정보")
-    lines.append(f"표면이자율: {format_percent(bond_info.get('bd_intr_ex'))}")
-    lines.append(f"만기이자율: {format_percent(bond_info.get('bd_intr_sf'))}")
+    lines.append(f"표면이자율: {_format_percent(bond_info.get('bd_intr_ex'))}")
+    lines.append(f"만기이자율: {_format_percent(bond_info.get('bd_intr_sf'))}")
     lines.append("")
 
     lines.append(f"전환 정보")
-    lines.append(f"전환가액: {format_amount(bond_info.get('cv_prc'))} (1주당)")
-    lines.append(f"전환비율: {format_percent(bond_info.get('cv_rt'))}")
-    lines.append(f"주식총수 대비: {format_percent(bond_info.get('cvisstk_tisstk_vs'))}")
+    lines.append(f"전환가액: {_format_amount(bond_info.get('cv_prc'))} (1주당)")
+    lines.append(f"전환비율: {_format_percent(bond_info.get('cv_rt'))}")
+    lines.append(
+        f"주식총수 대비: {_format_percent(bond_info.get('cvisstk_tisstk_vs'))}"
+    )
     lines.append(
         f"전환청구기간: {bond_info.get('cvrqpd_bgd', '-')} ~ {bond_info.get('cvrqpd_edd', '-')}"
     )
     lines.append(
-        f"최저조정가액: {format_amount(bond_info.get('act_mktprcfl_cvprc_lwtrsprc'))}"
+        f"최저조정가액: {_format_amount(bond_info.get('act_mktprcfl_cvprc_lwtrsprc'))}"
     )
     lines.append("")
 
@@ -194,20 +269,22 @@ def get_convertible_bond(
     funding_purposes = []
     if bond_info.get("fdpp_fclt") not in [None, "-", ""]:
         funding_purposes.append(
-            f"시설자금: {format_amount(bond_info.get('fdpp_fclt'))}"
+            f"시설자금: {_format_amount(bond_info.get('fdpp_fclt'))}"
         )
     if bond_info.get("fdpp_op") not in [None, "-", ""]:
-        funding_purposes.append(f"운영자금: {format_amount(bond_info.get('fdpp_op'))}")
+        funding_purposes.append(f"운영자금: {_format_amount(bond_info.get('fdpp_op'))}")
     if bond_info.get("fdpp_dtrp") not in [None, "-", ""]:
         funding_purposes.append(
-            f"채무상환자금: {format_amount(bond_info.get('fdpp_dtrp'))}"
+            f"채무상환자금: {_format_amount(bond_info.get('fdpp_dtrp'))}"
         )
     if bond_info.get("fdpp_ocsa") not in [None, "-", ""]:
         funding_purposes.append(
-            f"타법인증권취득자금: {format_amount(bond_info.get('fdpp_ocsa'))}"
+            f"타법인증권취득자금: {_format_amount(bond_info.get('fdpp_ocsa'))}"
         )
     if bond_info.get("fdpp_etc") not in [None, "-", ""]:
-        funding_purposes.append(f"기타자금: {format_amount(bond_info.get('fdpp_etc'))}")
+        funding_purposes.append(
+            f"기타자금: {_format_amount(bond_info.get('fdpp_etc'))}"
+        )
 
     if funding_purposes:
         lines.append(f"자금조달 목적")
@@ -263,18 +340,132 @@ def get_stock_sale(
 def get_treasury_stock_trust(
     corp_code: Union[str, int],
     date: Union[str, int],
-) -> Dict[str, Any]:
+) -> str:
     """
     자기주식취득 신탁계약 체결 결정 조회
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
-    return send_dart_api(
+    data = send_dart_api(
         "자기주식취득 신탁계약 체결 결정",
         corp_code=corp_code,
         bgn_de=date,
         end_de=date,
     )
+
+    lines = []
+    if not data or data.get("status") != "000" or not data.get("list"):
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
+
+    trust_info = data["list"][0]
+
+    lines.append(f"자기주식취득 신탁계약 체결정보")
+    lines.append("=" * 20)
+    lines.append(f"회사명: {trust_info.get('corp_name', '-')}")
+    lines.append(f"이사회결의일: {trust_info.get('bddd', '-')}")
+    lines.append("")
+
+    lines.append(f"계약 정보")
+    lines.append(f"계약금액: {_format_amount(trust_info.get('ctr_prc'))}")
+    lines.append(
+        f"계약기간: {trust_info.get('ctr_pd_bgd', '-')} ~ {trust_info.get('ctr_pd_edd', '-')}"
+    )
+    lines.append(f"계약목적: {trust_info.get('ctr_pp', '-')}")
+    lines.append(f"계약체결기관: {trust_info.get('ctr_cns_int', '-')}")
+    lines.append(f"계약체결 예정일자: {trust_info.get('ctr_cns_prd', '-')}")
+    lines.append(f"위탁투자중개업자: {trust_info.get('cs_iv_bk', '-')}")
+    lines.append("")
+
+    lines.append(f"계약 전 자기주식 보유현황")
+    lines.append(f"[배당가능범위 내 취득]")
+    lines.append(
+        f"  보통주식: {_format_shares(trust_info.get('aq_wtn_div_ostk'))} ({_format_percent(trust_info.get('aq_wtn_div_ostk_rt'))})"
+    )
+    lines.append(
+        f"  기타주식: {_format_shares(trust_info.get('aq_wtn_div_estk'))} ({_format_percent(trust_info.get('aq_wtn_div_estk_rt'))})"
+    )
+    lines.append(f"[기타취득]")
+    lines.append(
+        f"  보통주식: {_format_shares(trust_info.get('eaq_ostk'))} ({_format_percent(trust_info.get('eaq_ostk_rt'))})"
+    )
+    lines.append(
+        f"  기타주식: {_format_shares(trust_info.get('eaq_estk'))} ({_format_percent(trust_info.get('eaq_estk_rt'))})"
+    )
+    lines.append("")
+
+    lines.append(f"이사회 정보")
+    lines.append(
+        f"사외이사 참석: {trust_info.get('od_a_at_t', '-')}명 / 불참: {trust_info.get('od_a_at_b', '-')}명"
+    )
+    lines.append(f"감사(위원) 참석여부: {trust_info.get('adt_a_atn', '-')}")
+
+    return "\n".join(lines)
+
+
+def get_treasury_stock_trust_cancel(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> str:
+    """
+    자기주식취득 신탁계약 해지 결정 조회
+    - corp_code: 8자리 고유번호
+    - date: YYYYMMDD
+    """
+    data = send_dart_api(
+        "자기주식취득 신탁계약 해지 결정",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+    lines = []
+    if not data or data.get("status") != "000" or not data.get("list"):
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
+
+    trust_info = data["list"][0]
+
+    lines.append(f"자기주식취득 신탁계약 해지 결정 정보")
+    lines.append("=" * 20)
+    lines.append(f"회사명: {trust_info.get('corp_name', '-')}")
+    lines.append(f"이사회결의일(결정일): {trust_info.get('bddd', '-')}")
+    lines.append("")
+
+    lines.append("계약 정보")
+    lines.append(f"해지 전 계약금액: {_format_amount(trust_info.get('ctr_prc_bfcc'))}")
+    lines.append(f"해지 후 계약금액: {_format_amount(trust_info.get('ctr_prc_atcc'))}")
+    lines.append(
+        f"해지 전 계약기간: {trust_info.get('ctr_pd_bfcc_bgd', '-')} ~ {trust_info.get('ctr_pd_bfcc_edd', '-')}"
+    )
+    lines.append(f"해지목적: {trust_info.get('cc_pp', '-')}")
+    lines.append(f"해지기관: {trust_info.get('cc_int', '-')}")
+    lines.append(f"해지예정일자: {trust_info.get('cc_prd', '-')}")
+    lines.append(f"해지후 신탁재산의 반환방법: {trust_info.get('tp_rm_atcc', '-')}")
+    lines.append("")
+
+    lines.append("해지 전 자기주식 보유현황")
+    lines.append("[배당가능범위 내 취득]")
+    lines.append(
+        f"  보통주식: {_format_shares(trust_info.get('aq_wtn_div_ostk'))} ({_format_percent(trust_info.get('aq_wtn_div_ostk_rt'))})"
+    )
+    lines.append(
+        f"  기타주식: {_format_shares(trust_info.get('aq_wtn_div_estk'))} ({_format_percent(trust_info.get('aq_wtn_div_estk_rt'))})"
+    )
+    lines.append("[기타취득]")
+    lines.append(
+        f"  보통주식: {_format_shares(trust_info.get('eaq_ostk'))} ({_format_percent(trust_info.get('eaq_ostk_rt'))})"
+    )
+    lines.append(
+        f"  기타주식: {_format_shares(trust_info.get('eaq_estk'))} ({_format_percent(trust_info.get('eaq_estk_rt'))})"
+    )
+    lines.append("")
+
+    lines.append("이사회 정보")
+    lines.append(
+        f"사외이사 참석: {trust_info.get('od_a_at_t', '-')}명 / 불참: {trust_info.get('od_a_at_b', '-')}명"
+    )
+    lines.append(f"감사(위원) 참석여부: {trust_info.get('adt_a_atn', '-')}")
+
+    return "\n".join(lines)
 
 
 def get_treasury_stock_buy(
@@ -384,7 +575,7 @@ dart_API_function_map = {
     "영업정지": None,
     "회생절차 개시신청": None,
     "해산사유 발생": None,
-    "유상증자 결정": None,
+    "유상증자 결정": get_paid_in_capital_increase,
     "무상증자 결정": None,
     "유무상증자 결정": None,
     "감자 결정": None,
@@ -402,8 +593,8 @@ dart_API_function_map = {
     "자기주식 취득 결정": None,
     "자기주식 처분 결정": None,
     "자기주식 소각 결정": None,
-    "자기주식취득 신탁계약 체결 결정": None,
-    "자기주식취득 신탁계약 해지 결정": None,
+    "자기주식취득 신탁계약 체결 결정": get_treasury_stock_trust,
+    "자기주식취득 신탁계약 해지 결정": get_treasury_stock_trust_cancel,
     "영업양수 결정": None,
     "영업양도 결정": None,
     "유형자산 양수 결정": None,
