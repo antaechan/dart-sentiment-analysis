@@ -127,7 +127,7 @@ def fetch_and_update_disclosure_raw(
         "raw_update",
     ],
     params={
-        "disclosure_type": "매출액변동",
+        "disclosure_type": "기술이전계약해지",
     },
 )
 def update_kind_disclosure_raw_dag():

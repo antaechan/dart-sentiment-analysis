@@ -241,6 +241,13 @@ def extract_table_content(html: str, table_formatter=None) -> str:
     if not table:
         table = soup.find("table", {"id": "XFormD1_Form0_Table0"})
 
+    if not table:
+        tables = soup.find_all("table", {"id": "XFormD2_Form0_Table0"})
+        if tables:
+            table = tables[0]
+            if len(tables) >= 2:
+                table = tables[1]
+
     # 3) 첫 번째 테이블 폴백
     if not table:
         all_tables = soup.find_all("table")

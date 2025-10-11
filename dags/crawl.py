@@ -108,6 +108,53 @@ def format_table_performance_change(table: BeautifulSoup) -> str:
     return "\n".join(result)
 
 
+def format_table_patent_rights(table: BeautifulSoup) -> str:
+    """경영실적 변동에 맞게 tr/td 구조를 텍스트로 정제한다."""
+    rows = table.find_all("tr")
+    output_lines = []
+
+    # print(rows)
+
+    for tr in rows:
+        cells = tr.find_all(["td", "th"])
+        if not cells:
+            continue
+
+        tds = [normalize_cell_text(td) for td in cells]
+        main = tds[0].strip()
+        if not main:
+            continue
+
+        if len(tds) == 1:
+            output_lines.append(main)
+            continue
+
+        if len(tds) == 2:
+            output_lines.append(f"{main}: {tds[1]}")
+            continue
+
+        details = []
+        for i in range(1, len(tds)):
+            if i % 2 == 1 and i + 1 < len(tds):
+                name = tds[i]
+                value = tds[i + 1]
+                if name and name != "-":
+                    details.append(f"{name}: {value}")
+                else:
+                    details.append(value)
+            elif i % 2 == 1 and i + 1 == len(tds):
+                # 마지막 남은 항목 처리(이름만 남음)
+                details.append(tds[i])
+
+        if details:
+            output_lines.append(main)
+            output_lines.extend(details)
+        else:
+            output_lines.append(main)
+
+    return "\n".join(output_lines)
+
+
 # config.py의 keywords 키와 DART API 명칭 매핑
 crawling_function_map = {
     "임상 계획 철회": None,
@@ -153,16 +200,16 @@ crawling_function_map = {
     "주식교환·이전 결정": None,
     "지분공시": None,
     "실적공시": None,
-    "단일판매ㆍ공급계약해지": format_table_supply_contract,
-    "단일판매ㆍ공급계약체결": None,
+    "단일판매ㆍ공급계약해지": format_table_patent_rights,
+    "단일판매ㆍ공급계약체결": format_table_supply_contract,
     "생산중단": None,
     "배당": None,
     "매출액변동": format_table_performance_change,
     "소송등의판결ㆍ결정": None,
-    "특허권취득": None,
-    "신규시설투자": None,
-    "기술이전계약해지": None,
-    "기술이전계약체결": None,
+    "특허권취득": format_table_patent_rights,
+    "신규시설투자": format_table_patent_rights,
+    "기술이전계약해지": format_table_patent_rights,
+    "기술이전계약체결": format_table_patent_rights,
     "품목허가 철회": None,
     "품목허가 신청": None,
     "품목허가 승인": None,
