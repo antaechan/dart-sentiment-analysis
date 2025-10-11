@@ -1,4 +1,6 @@
 import os
+import random
+import time
 from typing import Any, Dict, Optional, Union
 
 import requests
@@ -9,68 +11,16 @@ load_dotenv()
 DART_BASE_URL = "https://opendart.fss.or.kr/api"
 DART_API_KEY = os.getenv("DART_API_KEY")
 
+SESSION = requests.Session()
 
-# config.py의 keywords 키와 DART API 명칭 매핑
-dart_API_map = {
-    "임상 계획 철회": None,  # DART API 없음
-    "임상 계획 신청": None,  # DART API 없음
-    "임상 계획 승인": None,  # DART API 없음
-    "임상 계획 결과 발표": None,  # DART API 없음
-    "자산양수도(기타), 풋백옵션": "astInhtrfEtcPtbkOpt",  # DART API 없음
-    "부도발생": None,  # DART API 없음
-    "영업정지": None,  # DART API 없음
-    "회생절차 개시신청": "ctrcvsBgrq",  # DART API 없음
-    "해산사유 발생": "ctrcvsBgrq",  # DART API 없음
-    "유상증자 결정": "ctrcvsBgrq",  # DART API 없음
-    "무상증자 결정": "fricDecsn",  # DART API 없음
-    "유무상증자 결정": None,  # DART API 없음
-    "감자 결정": "crDecsn",  # DART API 없음
-    "채권은행 등의 관리절차 개시": "bnkMngtPcbg",  # DART API 없음
-    "소송 등의 제기": "lwstLg",  # DART API 없음
-    "해외 증권시장 주권등 상장 결정": "ovLstDecsn",  # DART API 없음
-    "해외 증권시장 주권등 상장폐지 결정": "ovDlstDecsn",  # DART API 없음
-    "해외 증권시장 주권등 상장": "ovLst",  # DART API 없음
-    "해외 증권시장 주권등 상장폐지": "ovDlst",  # DART API 없음
-    "전환사채권 발행결정": "cvbdIsDecsn",
-    "신주인수권부사채권 발행결정": "bdwtIsDecsn",  # DART API 없음
-    "교환사채권 발행결정": "exbdIsDecsn",  # DART API 없음
-    "채권은행 등의 관리절차 중단": "bnkMngtPcsp",  # DART API 없음
-    "상각형 조건부자본증권 발행결정": "wdCocobdIsDecsn",  # DART API 없음
-    "자기주식 취득 결정": "tsstkAqDecsn",
-    "자기주식 처분 결정": "tsstkDpDecsn",
-    "자기주식 소각 결정": None,  # DART API 없음
-    "자기주식취득 신탁계약 체결 결정": "tsstkAqTrctrCnsDecsn",
-    "자기주식취득 신탁계약 해지 결정": "tsstkAqTrctrCcDecsn",  # DART API 없음
-    "영업양수 결정": "bsnInhDecsn",  # DART API 없음
-    "영업양도 결정": "bsnTrfDecsn",  # DART API 없음
-    "유형자산 양수 결정": "tgastInhDecsn",  # DART API 없음
-    "유형자산 양도 결정": "tgastTrfDecsn",  # DART API 없음
-    "타법인 주식 및 출자증권 양수결정": "otcprStkInvscrInhDecsn",
-    "타법인 주식 및 출자증권 양도결정": "otcprStkInvscrTrfDecsn",
-    "주권 관련 사채권 양수 결정": "stkrtbdInhDecsn",  # DART API 없음
-    "주권 관련 사채권 양도 결정": "stkrtbdTrfDecsn",  # DART API 없음
-    "회사합병 결정": "cmpMgDecsn",  # DART API 없음
-    "회사분할 결정": "cmpDvDecsn",  # DART API 없음
-    "회사분할합병 결정": "cmpDvmgDecsn",  # DART API 없음
-    "주식교환·이전 결정": "stkExtrDecsn",  # DART API 없음
-    "지분공시": None,  # DART API 없음
-    "실적공시": None,  # DART API 없음
-    "단일판매ㆍ공급계약해지": None,  # DART API 없음
-    "단일판매ㆍ공급계약체결": None,  # DART API 없음
-    "생산중단": None,  # DART API 없음
-    "배당": None,  # DART API 없음
-    "매출액변동": None,  # DART API 없음
-    "소송등의판결ㆍ결정": None,  # DART API 없음
-    "특허권취득": None,  # DART API 없음
-    "신규시설투자": None,  # DART API 없음
-    "기술이전계약해지": None,  # DART API 없음
-    "기술이전계약체결": None,  # DART API 없음
-    "품목허가 철회": None,  # DART API 없음
-    "품목허가 신청": None,  # DART API 없음
-    "품목허가 승인": None,  # DART API 없음
-    "횡령ㆍ배임혐의발생": None,  # DART API 없음
-    "공개매수": None,  # DART API 없음
-}
+# 요청 간 기본 딜레이(정중함) + 지터 범위
+_BASE_DELAY_SEC = 0.1  # 최소 대기
+_JITTER_SEC = 0.15  # 0 ~ 0.25초 랜덤 추가
+
+
+def _polite_pause():
+    """요청 사이에 기본 딜레이 + 지터."""
+    time.sleep(_BASE_DELAY_SEC + random.random() * _JITTER_SEC)
 
 
 class DartAPIError(Exception):
@@ -142,7 +92,8 @@ def send_dart_api(
     }
 
     try:
-        resp = requests.get(url, params=params)
+        _polite_pause()  # API 요청 전 지터 추가
+        resp = SESSION.get(url, params=params)
         resp.raise_for_status()
         data = resp.json()
 
@@ -184,7 +135,7 @@ def get_convertible_bond(
 
     lines = []
     if not data or data.get("status") != "000" or not data.get("list"):
-        return "데이터가 없습니다."
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
 
     bond_info = data["list"][0]
 
@@ -358,3 +309,128 @@ def get_treasury_stock_sell(
         bgn_de=date,
         end_de=date,
     )
+
+
+# config.py의 keywords 키와 DART API 명칭 매핑
+dart_API_map = {
+    "임상 계획 철회": None,  # DART API 없음
+    "임상 계획 신청": None,  # DART API 없음
+    "임상 계획 승인": None,  # DART API 없음
+    "임상 계획 결과 발표": None,  # DART API 없음
+    "자산양수도(기타), 풋백옵션": "astInhtrfEtcPtbkOpt",  # DART API 없음
+    "부도발생": None,  # DART API 없음
+    "영업정지": None,  # DART API 없음
+    "회생절차 개시신청": "ctrcvsBgrq",  # DART API 없음
+    "해산사유 발생": "ctrcvsBgrq",  # DART API 없음
+    "유상증자 결정": "ctrcvsBgrq",  # DART API 없음
+    "무상증자 결정": "fricDecsn",  # DART API 없음
+    "유무상증자 결정": None,  # DART API 없음
+    "감자 결정": "crDecsn",  # DART API 없음
+    "채권은행 등의 관리절차 개시": "bnkMngtPcbg",  # DART API 없음
+    "소송 등의 제기": "lwstLg",  # DART API 없음
+    "해외 증권시장 주권등 상장 결정": "ovLstDecsn",  # DART API 없음
+    "해외 증권시장 주권등 상장폐지 결정": "ovDlstDecsn",  # DART API 없음
+    "해외 증권시장 주권등 상장": "ovLst",  # DART API 없음
+    "해외 증권시장 주권등 상장폐지": "ovDlst",  # DART API 없음
+    "전환사채권 발행결정": "cvbdIsDecsn",
+    "신주인수권부사채권 발행결정": "bdwtIsDecsn",  # DART API 없음
+    "교환사채권 발행결정": "exbdIsDecsn",  # DART API 없음
+    "채권은행 등의 관리절차 중단": "bnkMngtPcsp",  # DART API 없음
+    "상각형 조건부자본증권 발행결정": "wdCocobdIsDecsn",  # DART API 없음
+    "자기주식 취득 결정": "tsstkAqDecsn",
+    "자기주식 처분 결정": "tsstkDpDecsn",
+    "자기주식 소각 결정": None,  # DART API 없음
+    "자기주식취득 신탁계약 체결 결정": "tsstkAqTrctrCnsDecsn",
+    "자기주식취득 신탁계약 해지 결정": "tsstkAqTrctrCcDecsn",  # DART API 없음
+    "영업양수 결정": "bsnInhDecsn",  # DART API 없음
+    "영업양도 결정": "bsnTrfDecsn",  # DART API 없음
+    "유형자산 양수 결정": "tgastInhDecsn",  # DART API 없음
+    "유형자산 양도 결정": "tgastTrfDecsn",  # DART API 없음
+    "타법인 주식 및 출자증권 양수결정": "otcprStkInvscrInhDecsn",
+    "타법인 주식 및 출자증권 양도결정": "otcprStkInvscrTrfDecsn",
+    "주권 관련 사채권 양수 결정": "stkrtbdInhDecsn",  # DART API 없음
+    "주권 관련 사채권 양도 결정": "stkrtbdTrfDecsn",  # DART API 없음
+    "회사합병 결정": "cmpMgDecsn",  # DART API 없음
+    "회사분할 결정": "cmpDvDecsn",  # DART API 없음
+    "회사분할합병 결정": "cmpDvmgDecsn",  # DART API 없음
+    "주식교환·이전 결정": "stkExtrDecsn",  # DART API 없음
+    "지분공시": None,  # DART API 없음
+    "실적공시": None,  # DART API 없음
+    "단일판매ㆍ공급계약해지": None,  # DART API 없음
+    "단일판매ㆍ공급계약체결": None,  # DART API 없음
+    "생산중단": None,  # DART API 없음
+    "배당": None,  # DART API 없음
+    "매출액변동": None,  # DART API 없음
+    "소송등의판결ㆍ결정": None,  # DART API 없음
+    "특허권취득": None,  # DART API 없음
+    "신규시설투자": None,  # DART API 없음
+    "기술이전계약해지": None,  # DART API 없음
+    "기술이전계약체결": None,  # DART API 없음
+    "품목허가 철회": None,  # DART API 없음
+    "품목허가 신청": None,  # DART API 없음
+    "품목허가 승인": None,  # DART API 없음
+    "횡령ㆍ배임혐의발생": None,  # DART API 없음
+    "공개매수": None,  # DART API 없음
+}
+
+# config.py의 keywords 키와 DART API 명칭 매핑
+dart_API_function_map = {
+    "임상 계획 철회": None,
+    "임상 계획 신청": None,
+    "임상 계획 승인": None,
+    "임상 계획 결과 발표": None,
+    "자산양수도(기타), 풋백옵션": None,
+    "부도발생": None,
+    "영업정지": None,
+    "회생절차 개시신청": None,
+    "해산사유 발생": None,
+    "유상증자 결정": None,
+    "무상증자 결정": None,
+    "유무상증자 결정": None,
+    "감자 결정": None,
+    "채권은행 등의 관리절차 개시": None,
+    "소송 등의 제기": None,
+    "해외 증권시장 주권등 상장 결정": None,
+    "해외 증권시장 주권등 상장폐지 결정": None,
+    "해외 증권시장 주권등 상장": None,
+    "해외 증권시장 주권등 상장폐지": None,
+    "전환사채권 발행결정": get_convertible_bond,
+    "신주인수권부사채권 발행결정": None,
+    "교환사채권 발행결정": None,
+    "채권은행 등의 관리절차 중단": None,
+    "상각형 조건부자본증권 발행결정": None,
+    "자기주식 취득 결정": None,
+    "자기주식 처분 결정": None,
+    "자기주식 소각 결정": None,
+    "자기주식취득 신탁계약 체결 결정": None,
+    "자기주식취득 신탁계약 해지 결정": None,
+    "영업양수 결정": None,
+    "영업양도 결정": None,
+    "유형자산 양수 결정": None,
+    "유형자산 양도 결정": None,
+    "타법인 주식 및 출자증권 양수결정": None,
+    "타법인 주식 및 출자증권 양도결정": None,
+    "주권 관련 사채권 양수 결정": None,
+    "주권 관련 사채권 양도 결정": None,
+    "회사합병 결정": None,
+    "회사분할 결정": None,
+    "회사분할합병 결정": None,
+    "주식교환·이전 결정": None,
+    "지분공시": None,
+    "실적공시": None,
+    "단일판매ㆍ공급계약해지": None,
+    "단일판매ㆍ공급계약체결": None,
+    "생산중단": None,
+    "배당": None,
+    "매출액변동": None,
+    "소송등의판결ㆍ결정": None,
+    "특허권취득": None,
+    "신규시설투자": None,
+    "기술이전계약해지": None,
+    "기술이전계약체결": None,
+    "품목허가 철회": None,
+    "품목허가 신청": None,
+    "품목허가 승인": None,
+    "횡령ㆍ배임혐의발생": None,
+    "공개매수": None,
+}
