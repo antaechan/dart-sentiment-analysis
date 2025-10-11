@@ -103,3 +103,5 @@ kind market, null 제외, 최초 발행(정정 제외)
 
 
 disclosure_type classification regex=True 활용해서 하기
+
+종속회사의 주요 경영사항(유상증자)의 경우는 해당 종속회사로 API call이 필요...

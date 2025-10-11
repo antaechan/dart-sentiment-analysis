@@ -131,7 +131,7 @@ def fetch_and_update_disclosure_raw(
         "raw_update",
     ],
     params={
-        "disclosure_type": "자기주식취득 신탁계약 해지 결정",
+        "disclosure_type": "유상증자 결정",
     },
 )
 def update_kind_disclosure_raw_dart_dag():

@@ -512,8 +512,8 @@ dart_API_map = {
     "부도발생": None,  # DART API 없음
     "영업정지": None,  # DART API 없음
     "회생절차 개시신청": "ctrcvsBgrq",  # DART API 없음
-    "해산사유 발생": "ctrcvsBgrq",  # DART API 없음
-    "유상증자 결정": "ctrcvsBgrq",  # DART API 없음
+    "해산사유 발생": "dsRsOcr",  # DART API 없음
+    "유상증자 결정": "piicDecsn",  # DART API 없음
     "무상증자 결정": "fricDecsn",  # DART API 없음
     "유무상증자 결정": None,  # DART API 없음
     "감자 결정": "crDecsn",  # DART API 없음
