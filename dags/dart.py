@@ -167,6 +167,24 @@ def get_paid_in_capital_increase(
         raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
 
     inc_info = data["list"][0]
+    excluded_fields = {
+        "rcept_no",
+        "corp_cls",
+        "corp_code",
+        "corp_name",
+        "ic_mthn",
+        "ssl_at",
+    }
+
+    all_empty = True
+    for key, value in inc_info.items():
+        if key not in excluded_fields:
+            if value is not None and value != "" and value != "-":
+                all_empty = False
+                break
+
+    if all_empty:
+        raise DartAPIError("필드가 누락되어있습니다")
 
     lines.append("유상증자 발행정보")
     lines.append("=" * 20)
@@ -227,6 +245,27 @@ def get_convertible_bond(
         raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
 
     bond_info = data["list"][0]
+
+    # Value가 '-' 가 아닌 key들을 excluded_fields에 추가
+    excluded_fields = {
+        "rcept_no",
+        "corp_cls",
+        "corp_code",
+        "corp_name",
+        "ftc_stt_atn",
+        "bdis_mthn",
+        "rs_sm_atn",
+    }
+
+    all_empty = True
+    for key, value in bond_info.items():
+        if key not in excluded_fields:
+            if value is not None and value != "" and value != "-":
+                all_empty = False
+                break
+
+    if all_empty:
+        raise DartAPIError("필드가 누락되어있습니다")
 
     lines.append(f"전환사채 발행정보")
     lines.append("=" * 20)
@@ -303,6 +342,134 @@ def get_convertible_bond(
     return "\n".join(lines)
 
 
+def get_capital_reduction(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> str:
+    """
+    감자 결정 조회
+    - corp_code: 8자리 고유번호
+    - date: YYYYMMDD
+    """
+    data = send_dart_api(
+        "감자 결정",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+    if not data or data.get("status") != "000" or not data.get("list"):
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
+
+    reduction_info = data["list"][0]
+
+    excluded_fields = {"rcept_no", "corp_cls", "corp_code", "corp_name", "ftc_stt_atn"}
+    all_empty = True
+    for key, value in reduction_info.items():
+        if key not in excluded_fields:
+            if value is not None and value != "" and value != "-":
+                all_empty = False
+                break
+
+    if all_empty:
+        raise DartAPIError("필드가 누락되어있습니다")
+
+    lines = []
+    lines.append("감자 결정 정보")
+    lines.append("=" * 20)
+    # 회사 및 결정 정보
+    lines.append(f"회사명: {reduction_info.get('corp_name', '-')}")
+    lines.append(f"법인구분: {reduction_info.get('corp_cls', '-')}")
+    lines.append(f"이사회결의일(결정일): {reduction_info.get('bddd', '-')}")
+    lines.append("")
+
+    # 감자주식 정보
+    lines.append("감자주식 종류 및 수")
+    lines.append(
+        f"  보통주식(주): {_format_shares(reduction_info.get('crstk_ostk_cnt'))}"
+    )
+    lines.append(
+        f"  기타주식(주): {_format_shares(reduction_info.get('crstk_estk_cnt'))}"
+    )
+    lines.append("")
+
+    # 감자 정보
+    lines.append("감자 정보")
+    lines.append(f"감자방법: {reduction_info.get('cr_mth', '-')}")
+    lines.append(f"감자사유: {reduction_info.get('cr_rs', '-')}")
+    lines.append(f"감자기준일: {reduction_info.get('cr_std', '-')}")
+    lines.append(f"1주당 액면가액(원): {_format_amount(reduction_info.get('fv_ps'))}")
+    lines.append("")
+
+    # 감자비율
+    lines.append("감자비율")
+    lines.append(f"  보통주식(%): {_format_percent(reduction_info.get('cr_rt_ostk'))}")
+    lines.append(f"  기타주식(%): {_format_percent(reduction_info.get('cr_rt_estk'))}")
+    lines.append("")
+
+    # 감자전/후 발행주식총수
+    lines.append("발행주식총수 (감자전/감자후)")
+    lines.append(
+        f"  감자전 - 보통주식(주): {_format_shares(reduction_info.get('bfcr_tisstk_ostk'))}"
+    )
+    lines.append(
+        f"  감자전 - 기타주식(주): {_format_shares(reduction_info.get('bfcr_tisstk_estk'))}"
+    )
+    lines.append(
+        f"  감자후 - 보통주식(주): {_format_shares(reduction_info.get('atcr_tisstk_ostk'))}"
+    )
+    lines.append(
+        f"  감자후 - 기타주식(주): {_format_shares(reduction_info.get('atcr_tisstk_estk'))}"
+    )
+    lines.append("")
+
+    # 자본금 변동
+    lines.append("자본금 변동")
+    lines.append(f"감자전 자본금(원): {_format_amount(reduction_info.get('bfcr_cpt'))}")
+    lines.append(f"감자후 자본금(원): {_format_amount(reduction_info.get('atcr_cpt'))}")
+    lines.append("")
+
+    # 감자일정
+    lines.append("감자일정")
+    lines.append(f"주주총회 예정일: {reduction_info.get('crsc_gmtsck_prd', '-')}")
+    lines.append(f"명의개서정지기간: {reduction_info.get('crsc_trnmsppd', '-')}")
+    lines.append(f"구주권 제출기간: {reduction_info.get('crsc_osprpd', '-')}")
+    lines.append(f"매매거래 정지예정기간: {reduction_info.get('crsc_trspprpd', '-')}")
+    lines.append(
+        f"구주권 제출기간(시작일): {reduction_info.get('crsc_osprpd_bgd', '-')}"
+    )
+    lines.append(
+        f"구주권 제출기간(종료일): {reduction_info.get('crsc_osprpd_edd', '-')}"
+    )
+    lines.append(
+        f"매매거래 정지예정기간(시작일): {reduction_info.get('crsc_trspprpd_bgd', '-')}"
+    )
+    lines.append(
+        f"매매거래 정지예정기간(종료일): {reduction_info.get('crsc_trspprpd_edd', '-')}"
+    )
+    lines.append(f"신주권교부예정일: {reduction_info.get('crsc_nstkdlprd', '-')}")
+    lines.append(f"신주상장예정일: {reduction_info.get('crsc_nstklstprd', '-')}")
+    lines.append("")
+
+    # 채권자 이의제출 관련
+    lines.append("채권자 이의제출기간")
+    lines.append(f"  시작일: {reduction_info.get('cdobprpd_bgd', '-')}")
+    lines.append(f"  종료일: {reduction_info.get('cdobprpd_edd', '-')}")
+    lines.append(f"구주권/신주권 교부장소: {reduction_info.get('ospr_nstkdl_pl', '-')}")
+    lines.append("")
+
+    # 사외이사, 감사위원, 공정위 신고
+    lines.append("기타 정보")
+    lines.append(f"사외이사 참석(명): {reduction_info.get('od_a_at_t', '-')}")
+    lines.append(f"사외이사 불참(명): {reduction_info.get('od_a_at_b', '-')}")
+    lines.append(f"감사(감사위원) 참석여부: {reduction_info.get('adt_a_atn', '-')}")
+    lines.append(
+        f"공정거래위원회 신고대상 여부: {reduction_info.get('ftc_stt_atn', '-')}"
+    )
+
+    return "\n".join(lines)
+
+
 def get_stock_acquisition(
     corp_code: Union[str, int],
     date: Union[str, int],
@@ -358,6 +525,8 @@ def get_treasury_stock_trust(
         raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
 
     trust_info = data["list"][0]
+
+    print(trust_info)
 
     lines.append(f"자기주식취득 신탁계약 체결정보")
     lines.append("=" * 20)
@@ -578,7 +747,7 @@ dart_API_function_map = {
     "유상증자 결정": get_paid_in_capital_increase,
     "무상증자 결정": None,
     "유무상증자 결정": None,
-    "감자 결정": None,
+    "감자 결정": get_capital_reduction,
     "채권은행 등의 관리절차 개시": None,
     "소송 등의 제기": None,
     "해외 증권시장 주권등 상장 결정": None,

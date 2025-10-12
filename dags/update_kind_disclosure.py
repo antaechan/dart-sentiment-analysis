@@ -127,7 +127,7 @@ def fetch_and_update_disclosure_raw(
         "raw_update",
     ],
     params={
-        "disclosure_type": "횡령ㆍ배임혐의발생",
+        "disclosure_type": "생산중단",
     },
 )
 def update_kind_disclosure_raw_dag():

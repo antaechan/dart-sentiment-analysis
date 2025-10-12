@@ -202,7 +202,7 @@ crawling_function_map = {
     "실적공시": None,
     "단일판매ㆍ공급계약해지": format_table_patent_rights,
     "단일판매ㆍ공급계약체결": format_table_supply_contract,
-    "생산중단": None,
+    "생산중단": format_table_patent_rights,
     "배당": None,
     "매출액변동": format_table_performance_change,
     "소송등의판결ㆍ결정": None,
