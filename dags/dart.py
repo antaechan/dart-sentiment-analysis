@@ -873,6 +873,62 @@ def get_rehabilitation_request(
     return "\n".join(lines)
 
 
+def get_lawsuit_filing(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> str:
+    """
+    소송 등의 제기 조회
+    - corp_code: 8자리 고유번호
+    - date: YYYYMMDD
+    """
+    data = send_dart_api(
+        "소송 등의 제기",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+    lines = []
+    if not data or data.get("status") != "000" or not data.get("list"):
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
+
+    lawsuit_info = data["list"][0]
+
+    excluded_fields = {"rcept_no", "corp_cls", "corp_code", "corp_name"}
+
+    all_empty = True
+    for key, value in lawsuit_info.items():
+        if key not in excluded_fields:
+            if value is not None and value != "" and value != "-":
+                all_empty = False
+                break
+
+    if all_empty:
+        raise DartAPIError("필드가 누락되어있습니다")
+
+    lines.append("소송 등의 제기 정보")
+    lines.append("=" * 20)
+    lines.append(f"회사명: {lawsuit_info.get('corp_name', '-')}")
+    lines.append(f"법인구분: {lawsuit_info.get('corp_cls', '-')}")
+    lines.append(f"접수번호: {lawsuit_info.get('rcept_no', '-')}")
+    lines.append("")
+
+    lines.append("소송 기본정보")
+    lines.append(f"사건의 명칭: {lawsuit_info.get('icnm', '-')}")
+    lines.append(f"원고ㆍ신청인: {lawsuit_info.get('ac_ap', '-')}")
+    lines.append(f"청구내용: {lawsuit_info.get('rq_cn', '-')}")
+    lines.append("")
+
+    lines.append("소송 일정 및 상태")
+    lines.append(f"관할법원: {lawsuit_info.get('cpct', '-')}")
+    lines.append(f"향후대책: {lawsuit_info.get('ft_ctp', '-')}")
+    lines.append(f"제기일자: {lawsuit_info.get('lgd', '-')}")
+    lines.append(f"확인일자: {lawsuit_info.get('cfd', '-')}")
+
+    return "\n".join(lines)
+
+
 # config.py의 keywords 키와 DART API 명칭 매핑
 dart_API_map = {
     "임상 계획 철회": None,  # DART API 없음
@@ -882,14 +938,14 @@ dart_API_map = {
     "자산양수도(기타), 풋백옵션": "astInhtrfEtcPtbkOpt",  # DART API 없음
     "부도발생": None,  # DART API 없음
     "영업정지": "bsnSp",
-    "회생절차 개시신청": "ctrcvsBgrq",  # DART API 없음
+    "회생절차 개시신청": "ctrcvsBgrq",
     "해산사유 발생": "dsRsOcr",  # DART API 없음
     "유상증자 결정": "piicDecsn",  # DART API 없음
     "무상증자 결정": "fricDecsn",  # DART API 없음
     "유무상증자 결정": None,  # DART API 없음
     "감자 결정": "crDecsn",  # DART API 없음
     "채권은행 등의 관리절차 개시": "bnkMngtPcbg",  # DART API 없음
-    "소송 등의 제기": "lwstLg",  # DART API 없음
+    "소송 등의 제기": "lwstLg",
     "해외 증권시장 주권등 상장 결정": "ovLstDecsn",  # DART API 없음
     "해외 증권시장 주권등 상장폐지 결정": "ovDlstDecsn",  # DART API 없음
     "해외 증권시장 주권등 상장": "ovLst",  # DART API 없음
@@ -951,7 +1007,7 @@ dart_API_function_map = {
     "유무상증자 결정": None,
     "감자 결정": get_capital_reduction,
     "채권은행 등의 관리절차 개시": None,
-    "소송 등의 제기": None,
+    "소송 등의 제기": get_lawsuit_filing,
     "해외 증권시장 주권등 상장 결정": None,
     "해외 증권시장 주권등 상장폐지 결정": None,
     "해외 증권시장 주권등 상장": None,
