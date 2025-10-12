@@ -224,6 +224,88 @@ def get_paid_in_capital_increase(
     return "\n".join(lines)
 
 
+def get_bonus_issue_decision(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> str:
+    """
+    무상증자 결정 조회
+    - corp_code: 8자리 고유번호
+    - date: YYYYMMDD
+    """
+    data = send_dart_api(
+        "무상증자 결정",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+    lines = []
+    if not data or data.get("status") != "000" or not data.get("list"):
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
+
+    inc_info = data["list"][0]
+
+    # print(inc_info)s
+
+    excluded_fields = {
+        "rcept_no",
+        "corp_cls",
+        "corp_code",
+        "corp_name",
+        "ic_mthn",
+        "ssl_at",
+    }
+
+    all_empty = True
+    for key, value in inc_info.items():
+        if key not in excluded_fields:
+            if value is not None and value != "" and value != "-":
+                all_empty = False
+                break
+
+    if all_empty:
+        raise DartAPIError("필드가 누락되어있습니다")
+
+    lines.append("무상증자 발행정보")
+    lines.append("=" * 20)
+    lines.append(f"회사명: {inc_info.get('corp_name', '-')}")
+    lines.append(f"법인구분: {inc_info.get('corp_cls', '-')}")
+    lines.append(f"이사회결의일(결정일): {inc_info.get('bddd', '-')}")
+    lines.append("")
+
+    lines.append("신주 종류 및 수")
+    lines.append(f"  보통주식(주): {_format_shares(inc_info.get('nstk_ostk_cnt'))}")
+    lines.append(f"  기타주식(주): {_format_shares(inc_info.get('nstk_estk_cnt'))}")
+    lines.append(f"1주당 액면가액(원): {_format_amount(inc_info.get('fv_ps'))}")
+    lines.append("")
+
+    lines.append("증자전 발행주식총수")
+    lines.append(f"  보통주식(주): {_format_shares(inc_info.get('bfic_tisstk_ostk'))}")
+    lines.append(f"  기타주식(주): {_format_shares(inc_info.get('bfic_tisstk_estk'))}")
+    lines.append("")
+
+    lines.append("신주배정기준일 및 배정정보")
+    lines.append(f"신주배정기준일: {inc_info.get('nstk_asstd', '-')}")
+    lines.append(
+        f"1주당 신주배정 주식수(보통주식): {inc_info.get('nstk_ascnt_ps_ostk', '-')}"
+    )
+    lines.append(
+        f"1주당 신주배정 주식수(기타주식): {inc_info.get('nstk_ascnt_ps_estk', '-')}"
+    )
+    lines.append(f"신주의 배당기산일: {inc_info.get('nstk_dividrk', '-')}")
+    lines.append(f"신주권교부예정일: {inc_info.get('nstk_dlprd', '-')}")
+    lines.append(f"신주의 상장 예정일: {inc_info.get('nstk_lstprd', '-')}")
+    lines.append("")
+
+    lines.append("이사회/감사 정보")
+    lines.append(f"사외이사 참석(명): {inc_info.get('od_a_at_t', '-')}")
+    lines.append(f"사외이사 불참(명): {inc_info.get('od_a_at_b', '-')}")
+    lines.append(f"감사(감사위원)참석 여부: {inc_info.get('adt_a_atn', '-')}")
+
+    return "\n".join(lines)
+
+
 def get_convertible_bond(
     corp_code: Union[str, int],
     date: Union[str, int],
@@ -671,6 +753,126 @@ def get_treasury_stock_sell(
     )
 
 
+def get_business_suspension(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> str:
+    """
+    영업정지 조회
+    - corp_code: 8자리 고유번호
+    - date: YYYYMMDD
+    """
+    data = send_dart_api(
+        "영업정지",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+    lines = []
+    if not data or data.get("status") != "000" or not data.get("list"):
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
+
+    suspension_info = data["list"][0]
+
+    excluded_fields = {"rcept_no", "corp_cls", "corp_code", "corp_name"}
+
+    all_empty = True
+    for key, value in suspension_info.items():
+        if key not in excluded_fields:
+            if value is not None and value != "" and value != "-":
+                all_empty = False
+                break
+
+    if all_empty:
+        raise DartAPIError("필드가 누락되어있습니다")
+
+    lines.append("영업정지 정보")
+    lines.append("=" * 20)
+    lines.append(f"회사명: {suspension_info.get('corp_name', '-')}")
+    lines.append(f"법인구분: {suspension_info.get('corp_cls', '-')}")
+    lines.append("")
+
+    lines.append(f"영업정지 분야: {suspension_info.get('bsnsp_rm', '-')}")
+    lines.append(f"영업정지 내역(금액): {suspension_info.get('bsnsp_amt', '-')}")
+    lines.append(f"영업정지 내역(최근매출총액): {suspension_info.get('rsl', '-')}")
+    lines.append(f"영업정지 내역(매출액 대비): {suspension_info.get('sl_vs', '-')}")
+    lines.append(f"영업정지 내역(대규모법인여부): {suspension_info.get('ls_atn', '-')}")
+    lines.append(
+        f"영업정지 내역(거래소 의무공시 해당 여부): {suspension_info.get('krx_stt_atn', '-')}"
+    )
+
+    lines.append("")
+    lines.append("영업정지 상세")
+    lines.append(f"영업정지 내용: {suspension_info.get('bsnsp_cn', '-')}")
+    lines.append(f"영업정지 사유: {suspension_info.get('bsnsp_rs', '-')}")
+    lines.append(f"향후대책: {suspension_info.get('ft_ctp', '-')}")
+    lines.append(f"영업정지영향: {suspension_info.get('bsnsp_af', '-')}")
+
+    lines.append("")
+    lines.append("일정 및 이사회")
+    lines.append(f"영업정지일자: {suspension_info.get('bsnspd', '-')}")
+    lines.append(f"이사회결의일(결정일): {suspension_info.get('bddd', '-')}")
+    lines.append(f"사외이사 참석여부(참석): {suspension_info.get('od_a_at_t', '-')}")
+    lines.append(f"사외이사 참석여부(불참): {suspension_info.get('od_a_at_b', '-')}")
+    lines.append(f"감사(감사위원) 참석여부: {suspension_info.get('adt_a_atn', '-')}")
+
+    return "\n".join(lines)
+
+
+def get_rehabilitation_request(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> str:
+    """
+    회생절차 개시신청 조회
+    - corp_code: 8자리 고유번호
+    - date: YYYYMMDD
+    """
+    data = send_dart_api(
+        "회생절차 개시신청",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+    lines = []
+    if not data or data.get("status") != "000" or not data.get("list"):
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
+
+    rehab_info = data["list"][0]
+
+    excluded_fields = {"rcept_no", "corp_cls", "corp_code", "corp_name"}
+
+    all_empty = True
+    for key, value in rehab_info.items():
+        if key not in excluded_fields:
+            if value is not None and value != "" and value != "-":
+                all_empty = False
+                break
+
+    if all_empty:
+        raise DartAPIError("필드가 누락되어있습니다")
+
+    lines.append("회생절차 개시신청 정보")
+    lines.append("=" * 20)
+    lines.append(f"회사명: {rehab_info.get('corp_name', '-')}")
+    lines.append(f"법인구분: {rehab_info.get('corp_cls', '-')}")
+    lines.append("")
+
+    lines.append("신청 정보")
+    lines.append(f"신청인 (회사와의 관계): {rehab_info.get('apcnt', '-')}")
+    lines.append(f"관할법원: {rehab_info.get('cpct', '-')}")
+    lines.append(f"신청사유: {rehab_info.get('rq_rs', '-')}")
+    lines.append(f"신청일자: {rehab_info.get('rqd', '-')}")
+    lines.append("")
+
+    lines.append("향후대책 및 일정")
+    lines.append(f"{rehab_info.get('ft_ctp_sc', '-')}")
+
+    return "\n".join(lines)
+
+
 # config.py의 keywords 키와 DART API 명칭 매핑
 dart_API_map = {
     "임상 계획 철회": None,  # DART API 없음
@@ -679,7 +881,7 @@ dart_API_map = {
     "임상 계획 결과 발표": None,  # DART API 없음
     "자산양수도(기타), 풋백옵션": "astInhtrfEtcPtbkOpt",  # DART API 없음
     "부도발생": None,  # DART API 없음
-    "영업정지": None,  # DART API 없음
+    "영업정지": "bsnSp",
     "회생절차 개시신청": "ctrcvsBgrq",  # DART API 없음
     "해산사유 발생": "dsRsOcr",  # DART API 없음
     "유상증자 결정": "piicDecsn",  # DART API 없음
@@ -741,11 +943,11 @@ dart_API_function_map = {
     "임상 계획 결과 발표": None,
     "자산양수도(기타), 풋백옵션": None,
     "부도발생": None,
-    "영업정지": None,
-    "회생절차 개시신청": None,
+    "영업정지": get_business_suspension,
+    "회생절차 개시신청": get_rehabilitation_request,
     "해산사유 발생": None,
     "유상증자 결정": get_paid_in_capital_increase,
-    "무상증자 결정": None,
+    "무상증자 결정": get_bonus_issue_decision,
     "유무상증자 결정": None,
     "감자 결정": get_capital_reduction,
     "채권은행 등의 관리절차 개시": None,
