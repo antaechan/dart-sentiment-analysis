@@ -213,6 +213,6 @@ crawling_function_map = {
     "품목허가 철회": None,
     "품목허가 신청": None,
     "품목허가 승인": None,
-    "횡령ㆍ배임혐의발생": None,
+    "횡령ㆍ배임혐의발생": format_table_patent_rights,
     "공개매수": None,
 }
