@@ -1,10 +1,12 @@
 import os
 import random
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import requests
 from dotenv import load_dotenv
+
+from dart_schemas import DISCLOSURE_SCHEMAS
 
 load_dotenv()
 
@@ -27,19 +29,6 @@ class DartAPIError(Exception):
     """DART API 호출 실패 예외"""
 
     pass
-
-
-def _normalize_corp_code(corp_code: Optional[Union[str, int]]) -> Optional[str]:
-    if corp_code is None:
-        return None
-    code = str(corp_code).strip()
-    if not code:
-        return None
-    # 숫자만 남기고 8자리 zero-pad
-    digits = "".join(ch for ch in code if ch.isdigit())
-    if not digits:
-        return None
-    return digits.zfill(8)
 
 
 def _normalize_date(yyyymmdd: Optional[Union[str, int]]) -> Optional[str]:
@@ -82,6 +71,193 @@ def _format_shares(shares_str: Optional[str]) -> str:
         return shares_str
 
 
+def _apply_format(value: Optional[str], format_type: Optional[str] = None) -> str:
+    """값에 포맷을 적용"""
+    if format_type == "amount":
+        return _format_amount(value)
+    elif format_type == "percent":
+        return _format_percent(value)
+    elif format_type == "shares":
+        return _format_shares(value)
+    else:
+        return value if value else "-"
+
+
+def _get_field_value(
+    data: Dict[str, Any],
+    key: Union[str, List[str]],
+    format_type: Union[str, List[str], None] = None,
+    template: Optional[str] = None,
+) -> str:
+    """
+    스키마에서 정의한 키로 값을 가져와서 포맷팅
+    - key: 단일 키 또는 키 리스트 (템플릿용)
+    - format_type: 단일 포맷 또는 포맷 리스트
+    - template: 복수 값을 조합할 때 사용 (예: "{} ~ {}")
+    """
+    # 단일 키인 경우
+    if isinstance(key, str):
+        value = data.get(key)
+        return _apply_format(value, format_type)
+
+    # 복수 키인 경우 (template 사용)
+    elif isinstance(key, list):
+        values = []
+        formats = (
+            format_type if isinstance(format_type, list) else [format_type] * len(key)
+        )
+
+        for k, fmt in zip(key, formats):
+            val = data.get(k)
+            formatted = _apply_format(val, fmt)
+            values.append(formatted)
+
+        if template:
+            return template.format(*values)
+        else:
+            return ", ".join(values)
+
+    return "-"
+
+
+def _check_field_has_value(data: Dict[str, Any], field_config: Dict[str, Any]) -> bool:
+    """필드에 의미있는 값이 있는지 확인 (optional 필드 체크용)"""
+    key = field_config.get("key")
+
+    if isinstance(key, str):
+        value = data.get(key)
+        return value is not None and value != "" and value != "-"
+    elif isinstance(key, list):
+        # 복수 키 중 하나라도 값이 있으면 True
+        return any(
+            data.get(k) is not None and data.get(k) != "" and data.get(k) != "-"
+            for k in key
+        )
+    return False
+
+
+def _validate_data_not_empty(data: Dict[str, Any], excluded_fields: set) -> None:
+    """
+    데이터가 excluded_fields를 제외하고 모두 비어있는지 확인
+    비어있으면 DartAPIError 발생
+    """
+    all_empty = True
+    for key, value in data.items():
+        if key not in excluded_fields:
+            if value is not None and value != "" and value != "-":
+                all_empty = False
+                break
+
+    if all_empty:
+        raise DartAPIError("필드가 누락되어있습니다")
+
+
+def render_disclosure_from_schema(disclosure_type: str, data: Dict[str, Any]) -> str:
+    """
+    스키마 기반으로 공시 정보를 텍스트로 렌더링
+
+    Args:
+        disclosure_type: 공시 유형 (예: "유상증자 결정")
+        data: DART API 응답 데이터
+
+    Returns:
+        포맷팅된 텍스트 문자열
+
+    Raises:
+        DartAPIError: 데이터가 없거나 모든 필드가 비어있을 때
+    """
+    # API 응답 검증
+    if not data or data.get("status") != "000" or not data.get("list"):
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
+
+    info = data["list"][0]
+
+    # 스키마 가져오기
+    schema = DISCLOSURE_SCHEMAS.get(disclosure_type)
+    if not schema:
+        raise DartAPIError(f"'{disclosure_type}'에 대한 스키마가 정의되지 않았습니다.")
+
+    # 데이터 검증 (모든 필드가 비어있지 않은지 확인)
+    excluded_fields = schema.get("excluded_fields", set())
+    _validate_data_not_empty(info, excluded_fields)
+
+    # 렌더링 시작
+    lines = []
+
+    for section in schema.get("sections", []):
+        # 섹션 제목 추가
+        section_title = section.get("title")
+        if section_title:
+            lines.append(section_title)
+            if section.get("separator"):
+                lines.append("=" * 20)
+
+        # 서브섹션이 있는 경우 (예: 자기주식 보유현황)
+        if "subsections" in section:
+            for subsection in section["subsections"]:
+                if subsection.get("title"):
+                    lines.append(subsection["title"])
+
+                for field in subsection.get("fields", []):
+                    label = field.get("label")
+                    value = _get_field_value(
+                        info,
+                        field.get("key"),
+                        field.get("format"),
+                        field.get("template"),
+                    )
+
+                    if label:
+                        lines.append(f"{label}: {value}")
+                    else:
+                        lines.append(value)
+
+        # 일반 필드 처리
+        else:
+            section_optional = section.get("optional", False)
+            has_any_value = False
+            section_lines = []
+
+            for field in section.get("fields", []):
+                field_optional = field.get("optional", False)
+
+                # optional 필드는 값이 있을 때만 출력
+                if field_optional and not _check_field_has_value(info, field):
+                    continue
+
+                label = field.get("label")
+                value = _get_field_value(
+                    info, field.get("key"), field.get("format"), field.get("template")
+                )
+
+                # suffix 처리
+                if field.get("suffix"):
+                    value = value + field.get("suffix")
+
+                # 값이 있으면 섹션에 포함
+                if value and value != "-":
+                    has_any_value = True
+
+                if label:
+                    section_lines.append(f"{label}: {value}")
+                else:
+                    # 라벨 없이 값만 출력
+                    section_lines.append(value)
+
+            # optional 섹션은 값이 하나라도 있을 때만 추가
+            if not section_optional or has_any_value:
+                lines.extend(section_lines)
+
+        # 섹션 사이 공백 추가
+        lines.append("")
+
+    # 마지막 빈 줄 제거
+    while lines and lines[-1] == "":
+        lines.pop()
+
+    return "\n".join(lines)
+
+
 def send_dart_api(
     disclosure_type: str,
     corp_code: Optional[Union[str, int]] = None,
@@ -115,7 +291,7 @@ def send_dart_api(
 
     params: Dict[str, Any] = {
         "crtfc_key": DART_API_KEY,
-        "corp_code": _normalize_corp_code(corp_code),
+        "corp_code": corp_code,
         "bgn_de": _normalize_date(bgn_de),
         "end_de": _normalize_date(end_de),
     }
@@ -151,77 +327,12 @@ def get_paid_in_capital_increase(
     date: Union[str, int],
 ) -> str:
     """
-    유상증자 결정 조회
+    유상증자 결정 조회 (스키마 기반)
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
-    data = send_dart_api(
-        "유상증자 결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
-    )
-
-    lines = []
-    if not data or data.get("status") != "000" or not data.get("list"):
-        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
-
-    inc_info = data["list"][0]
-    excluded_fields = {
-        "rcept_no",
-        "corp_cls",
-        "corp_code",
-        "corp_name",
-        "ic_mthn",
-        "ssl_at",
-    }
-
-    all_empty = True
-    for key, value in inc_info.items():
-        if key not in excluded_fields:
-            if value is not None and value != "" and value != "-":
-                all_empty = False
-                break
-
-    if all_empty:
-        raise DartAPIError("필드가 누락되어있습니다")
-
-    lines.append("유상증자 발행정보")
-    lines.append("=" * 20)
-    lines.append(f"회사명: {inc_info.get('corp_name', '-')}")
-    lines.append(f"법인구분: {inc_info.get('corp_cls', '-')}")
-    lines.append(f"이사회결의일: {inc_info.get('bddd', '-')}")
-    lines.append("")
-
-    lines.append("신주 종류 및 수")
-    lines.append(f"  보통주식(주): {_format_shares(inc_info.get('nstk_ostk_cnt'))}")
-    lines.append(f"  기타주식(주): {_format_shares(inc_info.get('nstk_estk_cnt'))}")
-    lines.append(f"1주당 액면가액(원): {_format_amount(inc_info.get('fv_ps'))}")
-    lines.append("")
-
-    lines.append("증자전 발행주식총수")
-    lines.append(f"  보통주식(주): {_format_shares(inc_info.get('bfic_tisstk_ostk'))}")
-    lines.append(f"  기타주식(주): {_format_shares(inc_info.get('bfic_tisstk_estk'))}")
-    lines.append("")
-
-    lines.append("자금조달의 목적")
-    lines.append(f"  시설자금(원): {_format_amount(inc_info.get('fdpp_fclt'))}")
-    lines.append(f"  영업양수자금(원): {_format_amount(inc_info.get('fdpp_bsninh'))}")
-    lines.append(f"  운영자금(원): {_format_amount(inc_info.get('fdpp_op'))}")
-    lines.append(f"  채무상환자금(원): {_format_amount(inc_info.get('fdpp_dtrp'))}")
-    lines.append(
-        f"  타법인증권 취득자금(원): {_format_amount(inc_info.get('fdpp_ocsa'))}"
-    )
-    lines.append(f"  기타자금(원): {_format_amount(inc_info.get('fdpp_etc'))}")
-    lines.append("")
-
-    lines.append("발행정보")
-    lines.append(f"증자방식: {inc_info.get('ic_mthn', '-')}")
-    lines.append(f"공매도해당여부: {inc_info.get('ssl_at', '-')}")
-    lines.append(f"공매도 시작일: {inc_info.get('ssl_bgd', '-')}")
-    lines.append(f"공매도 종료일: {inc_info.get('ssl_edd', '-')}")
-
-    return "\n".join(lines)
+    data = send_dart_api("유상증자 결정", corp_code=corp_code, bgn_de=date, end_de=date)
+    return render_disclosure_from_schema("유상증자 결정", data)
 
 
 def get_bonus_issue_decision(
@@ -229,81 +340,12 @@ def get_bonus_issue_decision(
     date: Union[str, int],
 ) -> str:
     """
-    무상증자 결정 조회
+    무상증자 결정 조회 (스키마 기반)
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
-    data = send_dart_api(
-        "무상증자 결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
-    )
-
-    lines = []
-    if not data or data.get("status") != "000" or not data.get("list"):
-        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
-
-    inc_info = data["list"][0]
-
-    # print(inc_info)s
-
-    excluded_fields = {
-        "rcept_no",
-        "corp_cls",
-        "corp_code",
-        "corp_name",
-        "ic_mthn",
-        "ssl_at",
-    }
-
-    all_empty = True
-    for key, value in inc_info.items():
-        if key not in excluded_fields:
-            if value is not None and value != "" and value != "-":
-                all_empty = False
-                break
-
-    if all_empty:
-        raise DartAPIError("필드가 누락되어있습니다")
-
-    lines.append("무상증자 발행정보")
-    lines.append("=" * 20)
-    lines.append(f"회사명: {inc_info.get('corp_name', '-')}")
-    lines.append(f"법인구분: {inc_info.get('corp_cls', '-')}")
-    lines.append(f"이사회결의일(결정일): {inc_info.get('bddd', '-')}")
-    lines.append("")
-
-    lines.append("신주 종류 및 수")
-    lines.append(f"  보통주식(주): {_format_shares(inc_info.get('nstk_ostk_cnt'))}")
-    lines.append(f"  기타주식(주): {_format_shares(inc_info.get('nstk_estk_cnt'))}")
-    lines.append(f"1주당 액면가액(원): {_format_amount(inc_info.get('fv_ps'))}")
-    lines.append("")
-
-    lines.append("증자전 발행주식총수")
-    lines.append(f"  보통주식(주): {_format_shares(inc_info.get('bfic_tisstk_ostk'))}")
-    lines.append(f"  기타주식(주): {_format_shares(inc_info.get('bfic_tisstk_estk'))}")
-    lines.append("")
-
-    lines.append("신주배정기준일 및 배정정보")
-    lines.append(f"신주배정기준일: {inc_info.get('nstk_asstd', '-')}")
-    lines.append(
-        f"1주당 신주배정 주식수(보통주식): {inc_info.get('nstk_ascnt_ps_ostk', '-')}"
-    )
-    lines.append(
-        f"1주당 신주배정 주식수(기타주식): {inc_info.get('nstk_ascnt_ps_estk', '-')}"
-    )
-    lines.append(f"신주의 배당기산일: {inc_info.get('nstk_dividrk', '-')}")
-    lines.append(f"신주권교부예정일: {inc_info.get('nstk_dlprd', '-')}")
-    lines.append(f"신주의 상장 예정일: {inc_info.get('nstk_lstprd', '-')}")
-    lines.append("")
-
-    lines.append("이사회/감사 정보")
-    lines.append(f"사외이사 참석(명): {inc_info.get('od_a_at_t', '-')}")
-    lines.append(f"사외이사 불참(명): {inc_info.get('od_a_at_b', '-')}")
-    lines.append(f"감사(감사위원)참석 여부: {inc_info.get('adt_a_atn', '-')}")
-
-    return "\n".join(lines)
+    data = send_dart_api("무상증자 결정", corp_code=corp_code, bgn_de=date, end_de=date)
+    return render_disclosure_from_schema("무상증자 결정", data)
 
 
 def get_convertible_bond(
@@ -311,117 +353,14 @@ def get_convertible_bond(
     date: Union[str, int],
 ) -> str:
     """
-    전환사채권 발행결정 조회
+    전환사채권 발행결정 조회 (스키마 기반)
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
     data = send_dart_api(
-        "전환사채권 발행결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
+        "전환사채권 발행결정", corp_code=corp_code, bgn_de=date, end_de=date
     )
-
-    lines = []
-    if not data or data.get("status") != "000" or not data.get("list"):
-        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
-
-    bond_info = data["list"][0]
-
-    # Value가 '-' 가 아닌 key들을 excluded_fields에 추가
-    excluded_fields = {
-        "rcept_no",
-        "corp_cls",
-        "corp_code",
-        "corp_name",
-        "ftc_stt_atn",
-        "bdis_mthn",
-        "rs_sm_atn",
-    }
-
-    all_empty = True
-    for key, value in bond_info.items():
-        if key not in excluded_fields:
-            if value is not None and value != "" and value != "-":
-                all_empty = False
-                break
-
-    if all_empty:
-        raise DartAPIError("필드가 누락되어있습니다")
-
-    lines.append(f"전환사채 발행정보")
-    lines.append("=" * 20)
-    lines.append(f"회사명: {bond_info.get('corp_name', '-')}")
-    lines.append(f"이사회결의일: {bond_info.get('bddd', '-')}")
-    lines.append("")
-
-    lines.append(f"발행정보")
-    lines.append(f"사채종류: {bond_info.get('bd_knd', '-')}")
-    lines.append(f"발행금액: {_format_amount(bond_info.get('bd_fta'))}")
-    lines.append(f"발행방법: {bond_info.get('bdis_mthn', '-')}")
-    lines.append(f"사채만기일: {bond_info.get('bd_mtd', '-')}")
-    lines.append("")
-
-    lines.append(f"이자율 정보")
-    lines.append(f"표면이자율: {_format_percent(bond_info.get('bd_intr_ex'))}")
-    lines.append(f"만기이자율: {_format_percent(bond_info.get('bd_intr_sf'))}")
-    lines.append("")
-
-    lines.append(f"전환 정보")
-    lines.append(f"전환가액: {_format_amount(bond_info.get('cv_prc'))} (1주당)")
-    lines.append(f"전환비율: {_format_percent(bond_info.get('cv_rt'))}")
-    lines.append(
-        f"주식총수 대비: {_format_percent(bond_info.get('cvisstk_tisstk_vs'))}"
-    )
-    lines.append(
-        f"전환청구기간: {bond_info.get('cvrqpd_bgd', '-')} ~ {bond_info.get('cvrqpd_edd', '-')}"
-    )
-    lines.append(
-        f"최저조정가액: {_format_amount(bond_info.get('act_mktprcfl_cvprc_lwtrsprc'))}"
-    )
-    lines.append("")
-
-    lines.append(f"일정")
-    lines.append(f"청약일: {bond_info.get('sbd', '-')}")
-    lines.append(f"납입일: {bond_info.get('pymd', '-')}")
-    lines.append("")
-
-    # 자금조달 목적이 있는 경우만 출력
-    funding_purposes = []
-    if bond_info.get("fdpp_fclt") not in [None, "-", ""]:
-        funding_purposes.append(
-            f"시설자금: {_format_amount(bond_info.get('fdpp_fclt'))}"
-        )
-    if bond_info.get("fdpp_op") not in [None, "-", ""]:
-        funding_purposes.append(f"운영자금: {_format_amount(bond_info.get('fdpp_op'))}")
-    if bond_info.get("fdpp_dtrp") not in [None, "-", ""]:
-        funding_purposes.append(
-            f"채무상환자금: {_format_amount(bond_info.get('fdpp_dtrp'))}"
-        )
-    if bond_info.get("fdpp_ocsa") not in [None, "-", ""]:
-        funding_purposes.append(
-            f"타법인증권취득자금: {_format_amount(bond_info.get('fdpp_ocsa'))}"
-        )
-    if bond_info.get("fdpp_etc") not in [None, "-", ""]:
-        funding_purposes.append(
-            f"기타자금: {_format_amount(bond_info.get('fdpp_etc'))}"
-        )
-
-    if funding_purposes:
-        lines.append(f"자금조달 목적")
-        for purpose in funding_purposes:
-            lines.append(f"{purpose}")
-        lines.append("")
-
-    lines.append(f"기타정보")
-    if bond_info.get("rpmcmp") not in [None, "-", ""]:
-        lines.append(f"대표주관회사: {bond_info.get('rpmcmp', '-')}")
-    if bond_info.get("grint") not in [None, "-", ""]:
-        lines.append(f"보증기관: {bond_info.get('grint', '-')}")
-    lines.append(f"증권신고서 제출대상: {bond_info.get('rs_sm_atn', '-')}")
-    if bond_info.get("ex_sm_r") not in [None, "-", ""]:
-        lines.append(f"제출면제사유: {bond_info.get('ex_sm_r', '-')}")
-    return "\n".join(lines)
+    return render_disclosure_from_schema("전환사채권 발행결정", data)
 
 
 def get_exchangeable_bond(
@@ -429,115 +368,14 @@ def get_exchangeable_bond(
     date: Union[str, int],
 ) -> str:
     """
-    교환사채권 발행결정 조회
+    교환사채권 발행결정 조회 (스키마 기반)
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
     data = send_dart_api(
-        "교환사채권 발행결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
+        "교환사채권 발행결정", corp_code=corp_code, bgn_de=date, end_de=date
     )
-
-    lines = []
-    if not data or data.get("status") != "000" or not data.get("list"):
-        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
-
-    bond_info = data["list"][0]
-
-    excluded_fields = {
-        "rcept_no",
-        "corp_cls",
-        "corp_code",
-        "corp_name",
-    }
-
-    all_empty = True
-    for key, value in bond_info.items():
-        if key not in excluded_fields:
-            if value is not None and value != "" and value != "-":
-                all_empty = False
-                break
-
-    if all_empty:
-        raise DartAPIError("필드가 누락되어있습니다")
-
-    lines.append(f"교환사채 발행정보")
-    lines.append("=" * 20)
-    # 교환사채권 발행결정 항목별 상세 정보 출력 (요구한 키/라벨/예시/포맷에 따라 순서 맞춤)
-    lines.append(f"공시대상회사명: {bond_info.get('corp_name', '-')}")
-    lines.append(f"사채의 종류(회차): {bond_info.get('bd_tm', '-')}")
-    lines.append(f"사채의 종류(종류): {bond_info.get('bd_knd', '-')}")
-    lines.append(
-        f"사채의 권면(전자등록)총액 (원): {_format_amount(bond_info.get('bd_fta'))}"
-    )
-    lines.append(
-        f"해외발행(권면(전자등록)총액): {_format_amount(bond_info.get('ovis_fta'))}"
-    )
-    lines.append(
-        f"해외발행(권면(전자등록)총액(통화단위)): {bond_info.get('ovis_fta_crn', '-')}"
-    )
-    lines.append(f"해외발행(기준환율등): {bond_info.get('ovis_ster', '-')}")
-    lines.append(f"해외발행(발행지역): {bond_info.get('ovis_isar', '-')}")
-    lines.append(
-        f"해외발행(해외상장시 시장의 명칭): {bond_info.get('ovis_mktnm', '-')}"
-    )
-    lines.append("")
-    lines.append("자금조달의 목적")
-    lines.append(f"시설자금 (원): {_format_amount(bond_info.get('fdpp_fclt'))}")
-    lines.append(f"영업양수자금 (원): {_format_amount(bond_info.get('fdpp_bsninh'))}")
-    lines.append(f"운영자금 (원): {_format_amount(bond_info.get('fdpp_op'))}")
-    lines.append(f"채무상환자금 (원): {_format_amount(bond_info.get('fdpp_dtrp'))}")
-    lines.append(
-        f"타법인 증권 취득자금 (원): {_format_amount(bond_info.get('fdpp_ocsa'))}"
-    )
-    lines.append(f"기타자금 (원): {_format_amount(bond_info.get('fdpp_etc'))}")
-    lines.append("")
-    lines.append("이자율 정보")
-    lines.append(
-        f"사채의 이율(표면이자율 (%)): {_format_percent(bond_info.get('bd_intr_ex'))}"
-    )
-    lines.append(
-        f"사채의 이율(만기이자율 (%)): {_format_percent(bond_info.get('bd_intr_sf'))}"
-    )
-    lines.append("")
-    lines.append(f"사채만기일: {bond_info.get('bd_mtd', '-')}")
-    lines.append(f"사채발행방법: {bond_info.get('bdis_mthn', '-')}")
-    lines.append("")
-    lines.append("교환에 관한 사항")
-    lines.append(f"교환비율 (%): {_format_percent(bond_info.get('ex_rt'))}")
-    lines.append(f"교환가액 (원/주): {_format_amount(bond_info.get('ex_prc'))}")
-    lines.append(f"교환가액 결정방법: {bond_info.get('ex_prc_dmth', '-')}")
-    lines.append(f"교환대상(종류): {bond_info.get('extg', '-')}")
-    lines.append(f"교환대상(주식수): {_format_amount(bond_info.get('extg_stkcnt'))}")
-    lines.append(
-        f"교환대상(주식총수 대비 비율(%)): {_format_percent(bond_info.get('extg_tisstk_vs'))}"
-    )
-    lines.append(f"교환청구기간(시작일): {bond_info.get('exrqpd_bgd', '-')}")
-    lines.append(f"교환청구기간(종료일): {bond_info.get('exrqpd_edd', '-')}")
-    lines.append("")
-    lines.append("일정")
-    lines.append(f"청약일: {bond_info.get('sbd', '-')}")
-    lines.append(f"납입일: {bond_info.get('pymd', '-')}")
-    lines.append("")
-    lines.append(f"대표주관회사: {bond_info.get('rpmcmp', '-')}")
-    lines.append(f"보증기관: {bond_info.get('grint', '-')}")
-    lines.append(f"이사회결의일(결정일): {bond_info.get('bddd', '-')}")
-    lines.append(
-        f"사외이사 참석여부(참석 (명)): {_format_amount(bond_info.get('od_a_at_t'))}"
-    )
-    lines.append(
-        f"사외이사 참석여부(불참 (명)): {_format_amount(bond_info.get('od_a_at_b'))}"
-    )
-    lines.append(f"감사(감사위원) 참석여부: {bond_info.get('adt_a_atn', '-')}")
-    lines.append(f"증권신고서 제출대상 여부: {bond_info.get('rs_sm_atn', '-')}")
-    lines.append(f"제출을 면제받은 경우 그 사유: {bond_info.get('ex_sm_r', '-')}")
-    lines.append(
-        f"당해 사채의 해외발행과 연계된 대차거래 내역: {bond_info.get('ovis_ltdtl', '-')}"
-    )
-    lines.append(f"공정거래위원회 신고대상 여부: {bond_info.get('ftc_stt_atn', '-')}")
-    return "\n".join(lines)
+    return render_disclosure_from_schema("교환사채권 발행결정", data)
 
 
 def get_capital_reduction(
@@ -545,127 +383,12 @@ def get_capital_reduction(
     date: Union[str, int],
 ) -> str:
     """
-    감자 결정 조회
+    감자 결정 조회 (스키마 기반)
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
-    data = send_dart_api(
-        "감자 결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
-    )
-
-    if not data or data.get("status") != "000" or not data.get("list"):
-        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
-
-    reduction_info = data["list"][0]
-
-    excluded_fields = {"rcept_no", "corp_cls", "corp_code", "corp_name", "ftc_stt_atn"}
-    all_empty = True
-    for key, value in reduction_info.items():
-        if key not in excluded_fields:
-            if value is not None and value != "" and value != "-":
-                all_empty = False
-                break
-
-    if all_empty:
-        raise DartAPIError("필드가 누락되어있습니다")
-
-    lines = []
-    lines.append("감자 결정 정보")
-    lines.append("=" * 20)
-    # 회사 및 결정 정보
-    lines.append(f"회사명: {reduction_info.get('corp_name', '-')}")
-    lines.append(f"법인구분: {reduction_info.get('corp_cls', '-')}")
-    lines.append(f"이사회결의일(결정일): {reduction_info.get('bddd', '-')}")
-    lines.append("")
-
-    # 감자주식 정보
-    lines.append("감자주식 종류 및 수")
-    lines.append(
-        f"  보통주식(주): {_format_shares(reduction_info.get('crstk_ostk_cnt'))}"
-    )
-    lines.append(
-        f"  기타주식(주): {_format_shares(reduction_info.get('crstk_estk_cnt'))}"
-    )
-    lines.append("")
-
-    # 감자 정보
-    lines.append("감자 정보")
-    lines.append(f"감자방법: {reduction_info.get('cr_mth', '-')}")
-    lines.append(f"감자사유: {reduction_info.get('cr_rs', '-')}")
-    lines.append(f"감자기준일: {reduction_info.get('cr_std', '-')}")
-    lines.append(f"1주당 액면가액(원): {_format_amount(reduction_info.get('fv_ps'))}")
-    lines.append("")
-
-    # 감자비율
-    lines.append("감자비율")
-    lines.append(f"  보통주식(%): {_format_percent(reduction_info.get('cr_rt_ostk'))}")
-    lines.append(f"  기타주식(%): {_format_percent(reduction_info.get('cr_rt_estk'))}")
-    lines.append("")
-
-    # 감자전/후 발행주식총수
-    lines.append("발행주식총수 (감자전/감자후)")
-    lines.append(
-        f"  감자전 - 보통주식(주): {_format_shares(reduction_info.get('bfcr_tisstk_ostk'))}"
-    )
-    lines.append(
-        f"  감자전 - 기타주식(주): {_format_shares(reduction_info.get('bfcr_tisstk_estk'))}"
-    )
-    lines.append(
-        f"  감자후 - 보통주식(주): {_format_shares(reduction_info.get('atcr_tisstk_ostk'))}"
-    )
-    lines.append(
-        f"  감자후 - 기타주식(주): {_format_shares(reduction_info.get('atcr_tisstk_estk'))}"
-    )
-    lines.append("")
-
-    # 자본금 변동
-    lines.append("자본금 변동")
-    lines.append(f"감자전 자본금(원): {_format_amount(reduction_info.get('bfcr_cpt'))}")
-    lines.append(f"감자후 자본금(원): {_format_amount(reduction_info.get('atcr_cpt'))}")
-    lines.append("")
-
-    # 감자일정
-    lines.append("감자일정")
-    lines.append(f"주주총회 예정일: {reduction_info.get('crsc_gmtsck_prd', '-')}")
-    lines.append(f"명의개서정지기간: {reduction_info.get('crsc_trnmsppd', '-')}")
-    lines.append(f"구주권 제출기간: {reduction_info.get('crsc_osprpd', '-')}")
-    lines.append(f"매매거래 정지예정기간: {reduction_info.get('crsc_trspprpd', '-')}")
-    lines.append(
-        f"구주권 제출기간(시작일): {reduction_info.get('crsc_osprpd_bgd', '-')}"
-    )
-    lines.append(
-        f"구주권 제출기간(종료일): {reduction_info.get('crsc_osprpd_edd', '-')}"
-    )
-    lines.append(
-        f"매매거래 정지예정기간(시작일): {reduction_info.get('crsc_trspprpd_bgd', '-')}"
-    )
-    lines.append(
-        f"매매거래 정지예정기간(종료일): {reduction_info.get('crsc_trspprpd_edd', '-')}"
-    )
-    lines.append(f"신주권교부예정일: {reduction_info.get('crsc_nstkdlprd', '-')}")
-    lines.append(f"신주상장예정일: {reduction_info.get('crsc_nstklstprd', '-')}")
-    lines.append("")
-
-    # 채권자 이의제출 관련
-    lines.append("채권자 이의제출기간")
-    lines.append(f"  시작일: {reduction_info.get('cdobprpd_bgd', '-')}")
-    lines.append(f"  종료일: {reduction_info.get('cdobprpd_edd', '-')}")
-    lines.append(f"구주권/신주권 교부장소: {reduction_info.get('ospr_nstkdl_pl', '-')}")
-    lines.append("")
-
-    # 사외이사, 감사위원, 공정위 신고
-    lines.append("기타 정보")
-    lines.append(f"사외이사 참석(명): {reduction_info.get('od_a_at_t', '-')}")
-    lines.append(f"사외이사 불참(명): {reduction_info.get('od_a_at_b', '-')}")
-    lines.append(f"감사(감사위원) 참석여부: {reduction_info.get('adt_a_atn', '-')}")
-    lines.append(
-        f"공정거래위원회 신고대상 여부: {reduction_info.get('ftc_stt_atn', '-')}"
-    )
-
-    return "\n".join(lines)
+    data = send_dart_api("감자 결정", corp_code=corp_code, bgn_de=date, end_de=date)
+    return render_disclosure_from_schema("감자 결정", data)
 
 
 def get_stock_acquisition(
@@ -707,66 +430,14 @@ def get_treasury_stock_trust(
     date: Union[str, int],
 ) -> str:
     """
-    자기주식취득 신탁계약 체결 결정 조회
+    자기주식취득 신탁계약 체결 결정 조회 (스키마 기반)
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
     data = send_dart_api(
-        "자기주식취득 신탁계약 체결 결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
+        "자기주식취득 신탁계약 체결 결정", corp_code=corp_code, bgn_de=date, end_de=date
     )
-
-    lines = []
-    if not data or data.get("status") != "000" or not data.get("list"):
-        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
-
-    trust_info = data["list"][0]
-
-    print(trust_info)
-
-    lines.append(f"자기주식취득 신탁계약 체결정보")
-    lines.append("=" * 20)
-    lines.append(f"회사명: {trust_info.get('corp_name', '-')}")
-    lines.append(f"이사회결의일: {trust_info.get('bddd', '-')}")
-    lines.append("")
-
-    lines.append(f"계약 정보")
-    lines.append(f"계약금액: {_format_amount(trust_info.get('ctr_prc'))}")
-    lines.append(
-        f"계약기간: {trust_info.get('ctr_pd_bgd', '-')} ~ {trust_info.get('ctr_pd_edd', '-')}"
-    )
-    lines.append(f"계약목적: {trust_info.get('ctr_pp', '-')}")
-    lines.append(f"계약체결기관: {trust_info.get('ctr_cns_int', '-')}")
-    lines.append(f"계약체결 예정일자: {trust_info.get('ctr_cns_prd', '-')}")
-    lines.append(f"위탁투자중개업자: {trust_info.get('cs_iv_bk', '-')}")
-    lines.append("")
-
-    lines.append(f"계약 전 자기주식 보유현황")
-    lines.append(f"[배당가능범위 내 취득]")
-    lines.append(
-        f"  보통주식: {_format_shares(trust_info.get('aq_wtn_div_ostk'))} ({_format_percent(trust_info.get('aq_wtn_div_ostk_rt'))})"
-    )
-    lines.append(
-        f"  기타주식: {_format_shares(trust_info.get('aq_wtn_div_estk'))} ({_format_percent(trust_info.get('aq_wtn_div_estk_rt'))})"
-    )
-    lines.append(f"[기타취득]")
-    lines.append(
-        f"  보통주식: {_format_shares(trust_info.get('eaq_ostk'))} ({_format_percent(trust_info.get('eaq_ostk_rt'))})"
-    )
-    lines.append(
-        f"  기타주식: {_format_shares(trust_info.get('eaq_estk'))} ({_format_percent(trust_info.get('eaq_estk_rt'))})"
-    )
-    lines.append("")
-
-    lines.append(f"이사회 정보")
-    lines.append(
-        f"사외이사 참석: {trust_info.get('od_a_at_t', '-')}명 / 불참: {trust_info.get('od_a_at_b', '-')}명"
-    )
-    lines.append(f"감사(위원) 참석여부: {trust_info.get('adt_a_atn', '-')}")
-
-    return "\n".join(lines)
+    return render_disclosure_from_schema("자기주식취득 신탁계약 체결 결정", data)
 
 
 def get_treasury_stock_trust_cancel(
@@ -774,65 +445,14 @@ def get_treasury_stock_trust_cancel(
     date: Union[str, int],
 ) -> str:
     """
-    자기주식취득 신탁계약 해지 결정 조회
+    자기주식취득 신탁계약 해지 결정 조회 (스키마 기반)
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
     data = send_dart_api(
-        "자기주식취득 신탁계약 해지 결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
+        "자기주식취득 신탁계약 해지 결정", corp_code=corp_code, bgn_de=date, end_de=date
     )
-
-    lines = []
-    if not data or data.get("status") != "000" or not data.get("list"):
-        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
-
-    trust_info = data["list"][0]
-
-    lines.append(f"자기주식취득 신탁계약 해지 결정 정보")
-    lines.append("=" * 20)
-    lines.append(f"회사명: {trust_info.get('corp_name', '-')}")
-    lines.append(f"이사회결의일(결정일): {trust_info.get('bddd', '-')}")
-    lines.append("")
-
-    lines.append("계약 정보")
-    lines.append(f"해지 전 계약금액: {_format_amount(trust_info.get('ctr_prc_bfcc'))}")
-    lines.append(f"해지 후 계약금액: {_format_amount(trust_info.get('ctr_prc_atcc'))}")
-    lines.append(
-        f"해지 전 계약기간: {trust_info.get('ctr_pd_bfcc_bgd', '-')} ~ {trust_info.get('ctr_pd_bfcc_edd', '-')}"
-    )
-    lines.append(f"해지목적: {trust_info.get('cc_pp', '-')}")
-    lines.append(f"해지기관: {trust_info.get('cc_int', '-')}")
-    lines.append(f"해지예정일자: {trust_info.get('cc_prd', '-')}")
-    lines.append(f"해지후 신탁재산의 반환방법: {trust_info.get('tp_rm_atcc', '-')}")
-    lines.append("")
-
-    lines.append("해지 전 자기주식 보유현황")
-    lines.append("[배당가능범위 내 취득]")
-    lines.append(
-        f"  보통주식: {_format_shares(trust_info.get('aq_wtn_div_ostk'))} ({_format_percent(trust_info.get('aq_wtn_div_ostk_rt'))})"
-    )
-    lines.append(
-        f"  기타주식: {_format_shares(trust_info.get('aq_wtn_div_estk'))} ({_format_percent(trust_info.get('aq_wtn_div_estk_rt'))})"
-    )
-    lines.append("[기타취득]")
-    lines.append(
-        f"  보통주식: {_format_shares(trust_info.get('eaq_ostk'))} ({_format_percent(trust_info.get('eaq_ostk_rt'))})"
-    )
-    lines.append(
-        f"  기타주식: {_format_shares(trust_info.get('eaq_estk'))} ({_format_percent(trust_info.get('eaq_estk_rt'))})"
-    )
-    lines.append("")
-
-    lines.append("이사회 정보")
-    lines.append(
-        f"사외이사 참석: {trust_info.get('od_a_at_t', '-')}명 / 불참: {trust_info.get('od_a_at_b', '-')}명"
-    )
-    lines.append(f"감사(위원) 참석여부: {trust_info.get('adt_a_atn', '-')}")
-
-    return "\n".join(lines)
+    return render_disclosure_from_schema("자기주식취득 신탁계약 해지 결정", data)
 
 
 def get_treasury_stock_buy(
@@ -874,66 +494,12 @@ def get_business_suspension(
     date: Union[str, int],
 ) -> str:
     """
-    영업정지 조회
+    영업정지 조회 (스키마 기반)
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
-    data = send_dart_api(
-        "영업정지",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
-    )
-
-    lines = []
-    if not data or data.get("status") != "000" or not data.get("list"):
-        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
-
-    suspension_info = data["list"][0]
-
-    excluded_fields = {"rcept_no", "corp_cls", "corp_code", "corp_name"}
-
-    all_empty = True
-    for key, value in suspension_info.items():
-        if key not in excluded_fields:
-            if value is not None and value != "" and value != "-":
-                all_empty = False
-                break
-
-    if all_empty:
-        raise DartAPIError("필드가 누락되어있습니다")
-
-    lines.append("영업정지 정보")
-    lines.append("=" * 20)
-    lines.append(f"회사명: {suspension_info.get('corp_name', '-')}")
-    lines.append(f"법인구분: {suspension_info.get('corp_cls', '-')}")
-    lines.append("")
-
-    lines.append(f"영업정지 분야: {suspension_info.get('bsnsp_rm', '-')}")
-    lines.append(f"영업정지 내역(금액): {suspension_info.get('bsnsp_amt', '-')}")
-    lines.append(f"영업정지 내역(최근매출총액): {suspension_info.get('rsl', '-')}")
-    lines.append(f"영업정지 내역(매출액 대비): {suspension_info.get('sl_vs', '-')}")
-    lines.append(f"영업정지 내역(대규모법인여부): {suspension_info.get('ls_atn', '-')}")
-    lines.append(
-        f"영업정지 내역(거래소 의무공시 해당 여부): {suspension_info.get('krx_stt_atn', '-')}"
-    )
-
-    lines.append("")
-    lines.append("영업정지 상세")
-    lines.append(f"영업정지 내용: {suspension_info.get('bsnsp_cn', '-')}")
-    lines.append(f"영업정지 사유: {suspension_info.get('bsnsp_rs', '-')}")
-    lines.append(f"향후대책: {suspension_info.get('ft_ctp', '-')}")
-    lines.append(f"영업정지영향: {suspension_info.get('bsnsp_af', '-')}")
-
-    lines.append("")
-    lines.append("일정 및 이사회")
-    lines.append(f"영업정지일자: {suspension_info.get('bsnspd', '-')}")
-    lines.append(f"이사회결의일(결정일): {suspension_info.get('bddd', '-')}")
-    lines.append(f"사외이사 참석여부(참석): {suspension_info.get('od_a_at_t', '-')}")
-    lines.append(f"사외이사 참석여부(불참): {suspension_info.get('od_a_at_b', '-')}")
-    lines.append(f"감사(감사위원) 참석여부: {suspension_info.get('adt_a_atn', '-')}")
-
-    return "\n".join(lines)
+    data = send_dart_api("영업정지", corp_code=corp_code, bgn_de=date, end_de=date)
+    return render_disclosure_from_schema("영업정지", data)
 
 
 def get_rehabilitation_request(
@@ -941,52 +507,14 @@ def get_rehabilitation_request(
     date: Union[str, int],
 ) -> str:
     """
-    회생절차 개시신청 조회
+    회생절차 개시신청 조회 (스키마 기반)
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
     data = send_dart_api(
-        "회생절차 개시신청",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
+        "회생절차 개시신청", corp_code=corp_code, bgn_de=date, end_de=date
     )
-
-    lines = []
-    if not data or data.get("status") != "000" or not data.get("list"):
-        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
-
-    rehab_info = data["list"][0]
-
-    excluded_fields = {"rcept_no", "corp_cls", "corp_code", "corp_name"}
-
-    all_empty = True
-    for key, value in rehab_info.items():
-        if key not in excluded_fields:
-            if value is not None and value != "" and value != "-":
-                all_empty = False
-                break
-
-    if all_empty:
-        raise DartAPIError("필드가 누락되어있습니다")
-
-    lines.append("회생절차 개시신청 정보")
-    lines.append("=" * 20)
-    lines.append(f"회사명: {rehab_info.get('corp_name', '-')}")
-    lines.append(f"법인구분: {rehab_info.get('corp_cls', '-')}")
-    lines.append("")
-
-    lines.append("신청 정보")
-    lines.append(f"신청인 (회사와의 관계): {rehab_info.get('apcnt', '-')}")
-    lines.append(f"관할법원: {rehab_info.get('cpct', '-')}")
-    lines.append(f"신청사유: {rehab_info.get('rq_rs', '-')}")
-    lines.append(f"신청일자: {rehab_info.get('rqd', '-')}")
-    lines.append("")
-
-    lines.append("향후대책 및 일정")
-    lines.append(f"{rehab_info.get('ft_ctp_sc', '-')}")
-
-    return "\n".join(lines)
+    return render_disclosure_from_schema("회생절차 개시신청", data)
 
 
 def get_lawsuit_filing(
@@ -994,55 +522,14 @@ def get_lawsuit_filing(
     date: Union[str, int],
 ) -> str:
     """
-    소송 등의 제기 조회
+    소송 등의 제기 조회 (스키마 기반)
     - corp_code: 8자리 고유번호
     - date: YYYYMMDD
     """
     data = send_dart_api(
-        "소송 등의 제기",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
+        "소송 등의 제기", corp_code=corp_code, bgn_de=date, end_de=date
     )
-
-    lines = []
-    if not data or data.get("status") != "000" or not data.get("list"):
-        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
-
-    lawsuit_info = data["list"][0]
-
-    excluded_fields = {"rcept_no", "corp_cls", "corp_code", "corp_name"}
-
-    all_empty = True
-    for key, value in lawsuit_info.items():
-        if key not in excluded_fields:
-            if value is not None and value != "" and value != "-":
-                all_empty = False
-                break
-
-    if all_empty:
-        raise DartAPIError("필드가 누락되어있습니다")
-
-    lines.append("소송 등의 제기 정보")
-    lines.append("=" * 20)
-    lines.append(f"회사명: {lawsuit_info.get('corp_name', '-')}")
-    lines.append(f"법인구분: {lawsuit_info.get('corp_cls', '-')}")
-    lines.append(f"접수번호: {lawsuit_info.get('rcept_no', '-')}")
-    lines.append("")
-
-    lines.append("소송 기본정보")
-    lines.append(f"사건의 명칭: {lawsuit_info.get('icnm', '-')}")
-    lines.append(f"원고ㆍ신청인: {lawsuit_info.get('ac_ap', '-')}")
-    lines.append(f"청구내용: {lawsuit_info.get('rq_cn', '-')}")
-    lines.append("")
-
-    lines.append("소송 일정 및 상태")
-    lines.append(f"관할법원: {lawsuit_info.get('cpct', '-')}")
-    lines.append(f"향후대책: {lawsuit_info.get('ft_ctp', '-')}")
-    lines.append(f"제기일자: {lawsuit_info.get('lgd', '-')}")
-    lines.append(f"확인일자: {lawsuit_info.get('cfd', '-')}")
-
-    return "\n".join(lines)
+    return render_disclosure_from_schema("소송 등의 제기", data)
 
 
 # config.py의 keywords 키와 DART API 명칭 매핑
