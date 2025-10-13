@@ -322,214 +322,27 @@ def send_dart_api(
         return {"status": "UNKNOWN_ERROR", "message": f"알 수 없는 오류: {e}"}
 
 
-def get_paid_in_capital_increase(
+def get_disclosure(
+    disclosure_type: str,
     corp_code: Union[str, int],
     date: Union[str, int],
 ) -> str:
     """
-    유상증자 결정 조회 (스키마 기반)
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    data = send_dart_api("유상증자 결정", corp_code=corp_code, bgn_de=date, end_de=date)
-    return render_disclosure_from_schema("유상증자 결정", data)
+    공시 정보 조회 공통 함수 (스키마 기반)
 
+    Args:
+        disclosure_type: 공시 유형 (예: "유상증자 결정", "전환사채권 발행결정")
+        corp_code: 8자리 고유번호
+        date: YYYYMMDD
 
-def get_bonus_issue_decision(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> str:
-    """
-    무상증자 결정 조회 (스키마 기반)
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    data = send_dart_api("무상증자 결정", corp_code=corp_code, bgn_de=date, end_de=date)
-    return render_disclosure_from_schema("무상증자 결정", data)
+    Returns:
+        포맷팅된 공시 텍스트
 
-
-def get_convertible_bond(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> str:
+    Raises:
+        DartAPIError: API 호출 실패 또는 데이터 없음
     """
-    전환사채권 발행결정 조회 (스키마 기반)
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    data = send_dart_api(
-        "전환사채권 발행결정", corp_code=corp_code, bgn_de=date, end_de=date
-    )
-    return render_disclosure_from_schema("전환사채권 발행결정", data)
-
-
-def get_exchangeable_bond(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> str:
-    """
-    교환사채권 발행결정 조회 (스키마 기반)
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    data = send_dart_api(
-        "교환사채권 발행결정", corp_code=corp_code, bgn_de=date, end_de=date
-    )
-    return render_disclosure_from_schema("교환사채권 발행결정", data)
-
-
-def get_capital_reduction(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> str:
-    """
-    감자 결정 조회 (스키마 기반)
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    data = send_dart_api("감자 결정", corp_code=corp_code, bgn_de=date, end_de=date)
-    return render_disclosure_from_schema("감자 결정", data)
-
-
-def get_stock_acquisition(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> Dict[str, Any]:
-    """
-    타법인 주식 및 출자증권 양수결정 조회
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    return send_dart_api(
-        "타법인 주식 및 출자증권 양수결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
-    )
-
-
-def get_stock_sale(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> Dict[str, Any]:
-    """
-    타법인 주식 및 출자증권 양도결정 조회
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    return send_dart_api(
-        "타법인 주식 및 출자증권 양도결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
-    )
-
-
-def get_treasury_stock_trust(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> str:
-    """
-    자기주식취득 신탁계약 체결 결정 조회 (스키마 기반)
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    data = send_dart_api(
-        "자기주식취득 신탁계약 체결 결정", corp_code=corp_code, bgn_de=date, end_de=date
-    )
-    return render_disclosure_from_schema("자기주식취득 신탁계약 체결 결정", data)
-
-
-def get_treasury_stock_trust_cancel(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> str:
-    """
-    자기주식취득 신탁계약 해지 결정 조회 (스키마 기반)
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    data = send_dart_api(
-        "자기주식취득 신탁계약 해지 결정", corp_code=corp_code, bgn_de=date, end_de=date
-    )
-    return render_disclosure_from_schema("자기주식취득 신탁계약 해지 결정", data)
-
-
-def get_treasury_stock_buy(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> Dict[str, Any]:
-    """
-    자기주식 취득 결정 조회
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    return send_dart_api(
-        "자기주식 취득 결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
-    )
-
-
-def get_treasury_stock_sell(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> Dict[str, Any]:
-    """
-    자기주식 처분 결정 조회
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    return send_dart_api(
-        "자기주식 처분 결정",
-        corp_code=corp_code,
-        bgn_de=date,
-        end_de=date,
-    )
-
-
-def get_business_suspension(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> str:
-    """
-    영업정지 조회 (스키마 기반)
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    data = send_dart_api("영업정지", corp_code=corp_code, bgn_de=date, end_de=date)
-    return render_disclosure_from_schema("영업정지", data)
-
-
-def get_rehabilitation_request(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> str:
-    """
-    회생절차 개시신청 조회 (스키마 기반)
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    data = send_dart_api(
-        "회생절차 개시신청", corp_code=corp_code, bgn_de=date, end_de=date
-    )
-    return render_disclosure_from_schema("회생절차 개시신청", data)
-
-
-def get_lawsuit_filing(
-    corp_code: Union[str, int],
-    date: Union[str, int],
-) -> str:
-    """
-    소송 등의 제기 조회 (스키마 기반)
-    - corp_code: 8자리 고유번호
-    - date: YYYYMMDD
-    """
-    data = send_dart_api(
-        "소송 등의 제기", corp_code=corp_code, bgn_de=date, end_de=date
-    )
-    return render_disclosure_from_schema("소송 등의 제기", data)
+    data = send_dart_api(disclosure_type, corp_code=corp_code, bgn_de=date, end_de=date)
+    return render_disclosure_from_schema(disclosure_type, data)
 
 
 # config.py의 keywords 키와 DART API 명칭 매핑
@@ -592,66 +405,4 @@ dart_API_map = {
     "품목허가 승인": None,  # DART API 없음
     "횡령ㆍ배임혐의발생": None,  # DART API 없음
     "공개매수": None,  # DART API 없음
-}
-
-# config.py의 keywords 키와 DART API 명칭 매핑
-dart_API_function_map = {
-    "임상 계획 철회": None,
-    "임상 계획 신청": None,
-    "임상 계획 승인": None,
-    "임상 계획 결과 발표": None,
-    "자산양수도(기타), 풋백옵션": None,
-    "부도발생": None,
-    "영업정지": get_business_suspension,
-    "회생절차 개시신청": get_rehabilitation_request,
-    "해산사유 발생": None,
-    "유상증자 결정": get_paid_in_capital_increase,
-    "무상증자 결정": get_bonus_issue_decision,
-    "유무상증자 결정": None,
-    "감자 결정": get_capital_reduction,
-    "채권은행 등의 관리절차 개시": None,
-    "소송 등의 제기": get_lawsuit_filing,  # TODO: 성공 30 실패 311
-    "해외 증권시장 주권등 상장 결정": None,
-    "해외 증권시장 주권등 상장폐지 결정": None,
-    "해외 증권시장 주권등 상장": None,
-    "해외 증권시장 주권등 상장폐지": None,
-    "전환사채권 발행결정": get_convertible_bond,
-    "신주인수권부사채권 발행결정": None,
-    "교환사채권 발행결정": get_exchangeable_bond,
-    "채권은행 등의 관리절차 중단": None,
-    "상각형 조건부자본증권 발행결정": None,
-    "자기주식 취득 결정": None,
-    "자기주식 처분 결정": None,
-    "자기주식 소각 결정": None,
-    "자기주식취득 신탁계약 체결 결정": get_treasury_stock_trust,
-    "자기주식취득 신탁계약 해지 결정": get_treasury_stock_trust_cancel,
-    "영업양수 결정": None,
-    "영업양도 결정": None,
-    "유형자산 양수 결정": None,
-    "유형자산 양도 결정": None,
-    "타법인 주식 및 출자증권 양수결정": None,
-    "타법인 주식 및 출자증권 양도결정": None,
-    "주권 관련 사채권 양수 결정": None,
-    "주권 관련 사채권 양도 결정": None,
-    "회사합병 결정": None,
-    "회사분할 결정": None,
-    "회사분할합병 결정": None,
-    "주식교환·이전 결정": None,
-    "지분공시": None,
-    "실적공시": None,
-    "단일판매ㆍ공급계약해지": None,
-    "단일판매ㆍ공급계약체결": None,
-    "생산중단": None,
-    "배당": None,
-    "매출액변동": None,
-    "소송등의판결ㆍ결정": None,
-    "특허권취득": None,
-    "신규시설투자": None,
-    "기술이전계약해지": None,
-    "기술이전계약체결": None,
-    "품목허가 철회": None,
-    "품목허가 신청": None,
-    "품목허가 승인": None,
-    "횡령ㆍ배임혐의발생": None,
-    "공개매수": None,
 }

@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from airflow.decorators import dag, task
 from database import create_database_engine
-from dart import dart_API_function_map
+from dart import get_disclosure, dart_API_map
 
 
 def fetch_and_update_disclosure_raw(
@@ -72,10 +72,16 @@ def fetch_and_update_disclosure_raw(
                 date = disclosed_at.strftime("%Y%m%d")
 
                 try:
+                    # DART API가 없는 공시 유형은 건너뛰기
+                    if dart_API_map.get(disclosure_type) is None:
+                        logging.warning(
+                            f"'{disclosure_type}' DART API가 없습니다. 건너뜁니다."
+                        )
+                        total_failed += 1
+                        continue
+
                     logging.info(f"처리 중: {disclosure_id} - {dart_unique_id}")
-                    raw_content = dart_API_function_map[disclosure_type](
-                        dart_unique_id, date
-                    )
+                    raw_content = get_disclosure(disclosure_type, dart_unique_id, date)
 
                     if raw_content and len(raw_content.strip()) > 0:
                         # raw 필드 업데이트
