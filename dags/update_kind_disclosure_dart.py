@@ -131,7 +131,7 @@ def fetch_and_update_disclosure_raw(
         "raw_update",
     ],
     params={
-        "disclosure_type": "소송 등의 제기",
+        "disclosure_type": "교환사채권 발행결정",
     },
 )
 def update_kind_disclosure_raw_dart_dag():

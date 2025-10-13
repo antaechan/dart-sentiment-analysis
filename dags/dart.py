@@ -424,6 +424,122 @@ def get_convertible_bond(
     return "\n".join(lines)
 
 
+def get_exchangeable_bond(
+    corp_code: Union[str, int],
+    date: Union[str, int],
+) -> str:
+    """
+    교환사채권 발행결정 조회
+    - corp_code: 8자리 고유번호
+    - date: YYYYMMDD
+    """
+    data = send_dart_api(
+        "교환사채권 발행결정",
+        corp_code=corp_code,
+        bgn_de=date,
+        end_de=date,
+    )
+
+    lines = []
+    if not data or data.get("status") != "000" or not data.get("list"):
+        raise DartAPIError("데이터가 없거나 API 요청 오류입니다.")
+
+    bond_info = data["list"][0]
+
+    excluded_fields = {
+        "rcept_no",
+        "corp_cls",
+        "corp_code",
+        "corp_name",
+    }
+
+    all_empty = True
+    for key, value in bond_info.items():
+        if key not in excluded_fields:
+            if value is not None and value != "" and value != "-":
+                all_empty = False
+                break
+
+    if all_empty:
+        raise DartAPIError("필드가 누락되어있습니다")
+
+    lines.append(f"교환사채 발행정보")
+    lines.append("=" * 20)
+    # 교환사채권 발행결정 항목별 상세 정보 출력 (요구한 키/라벨/예시/포맷에 따라 순서 맞춤)
+    lines.append(f"공시대상회사명: {bond_info.get('corp_name', '-')}")
+    lines.append(f"사채의 종류(회차): {bond_info.get('bd_tm', '-')}")
+    lines.append(f"사채의 종류(종류): {bond_info.get('bd_knd', '-')}")
+    lines.append(
+        f"사채의 권면(전자등록)총액 (원): {_format_amount(bond_info.get('bd_fta'))}"
+    )
+    lines.append(
+        f"해외발행(권면(전자등록)총액): {_format_amount(bond_info.get('ovis_fta'))}"
+    )
+    lines.append(
+        f"해외발행(권면(전자등록)총액(통화단위)): {bond_info.get('ovis_fta_crn', '-')}"
+    )
+    lines.append(f"해외발행(기준환율등): {bond_info.get('ovis_ster', '-')}")
+    lines.append(f"해외발행(발행지역): {bond_info.get('ovis_isar', '-')}")
+    lines.append(
+        f"해외발행(해외상장시 시장의 명칭): {bond_info.get('ovis_mktnm', '-')}"
+    )
+    lines.append("")
+    lines.append("자금조달의 목적")
+    lines.append(f"시설자금 (원): {_format_amount(bond_info.get('fdpp_fclt'))}")
+    lines.append(f"영업양수자금 (원): {_format_amount(bond_info.get('fdpp_bsninh'))}")
+    lines.append(f"운영자금 (원): {_format_amount(bond_info.get('fdpp_op'))}")
+    lines.append(f"채무상환자금 (원): {_format_amount(bond_info.get('fdpp_dtrp'))}")
+    lines.append(
+        f"타법인 증권 취득자금 (원): {_format_amount(bond_info.get('fdpp_ocsa'))}"
+    )
+    lines.append(f"기타자금 (원): {_format_amount(bond_info.get('fdpp_etc'))}")
+    lines.append("")
+    lines.append("이자율 정보")
+    lines.append(
+        f"사채의 이율(표면이자율 (%)): {_format_percent(bond_info.get('bd_intr_ex'))}"
+    )
+    lines.append(
+        f"사채의 이율(만기이자율 (%)): {_format_percent(bond_info.get('bd_intr_sf'))}"
+    )
+    lines.append("")
+    lines.append(f"사채만기일: {bond_info.get('bd_mtd', '-')}")
+    lines.append(f"사채발행방법: {bond_info.get('bdis_mthn', '-')}")
+    lines.append("")
+    lines.append("교환에 관한 사항")
+    lines.append(f"교환비율 (%): {_format_percent(bond_info.get('ex_rt'))}")
+    lines.append(f"교환가액 (원/주): {_format_amount(bond_info.get('ex_prc'))}")
+    lines.append(f"교환가액 결정방법: {bond_info.get('ex_prc_dmth', '-')}")
+    lines.append(f"교환대상(종류): {bond_info.get('extg', '-')}")
+    lines.append(f"교환대상(주식수): {_format_amount(bond_info.get('extg_stkcnt'))}")
+    lines.append(
+        f"교환대상(주식총수 대비 비율(%)): {_format_percent(bond_info.get('extg_tisstk_vs'))}"
+    )
+    lines.append(f"교환청구기간(시작일): {bond_info.get('exrqpd_bgd', '-')}")
+    lines.append(f"교환청구기간(종료일): {bond_info.get('exrqpd_edd', '-')}")
+    lines.append("")
+    lines.append("일정")
+    lines.append(f"청약일: {bond_info.get('sbd', '-')}")
+    lines.append(f"납입일: {bond_info.get('pymd', '-')}")
+    lines.append("")
+    lines.append(f"대표주관회사: {bond_info.get('rpmcmp', '-')}")
+    lines.append(f"보증기관: {bond_info.get('grint', '-')}")
+    lines.append(f"이사회결의일(결정일): {bond_info.get('bddd', '-')}")
+    lines.append(
+        f"사외이사 참석여부(참석 (명)): {_format_amount(bond_info.get('od_a_at_t'))}"
+    )
+    lines.append(
+        f"사외이사 참석여부(불참 (명)): {_format_amount(bond_info.get('od_a_at_b'))}"
+    )
+    lines.append(f"감사(감사위원) 참석여부: {bond_info.get('adt_a_atn', '-')}")
+    lines.append(f"증권신고서 제출대상 여부: {bond_info.get('rs_sm_atn', '-')}")
+    lines.append(f"제출을 면제받은 경우 그 사유: {bond_info.get('ex_sm_r', '-')}")
+    lines.append(
+        f"당해 사채의 해외발행과 연계된 대차거래 내역: {bond_info.get('ovis_ltdtl', '-')}"
+    )
+    lines.append(f"공정거래위원회 신고대상 여부: {bond_info.get('ftc_stt_atn', '-')}")
+    return "\n".join(lines)
+
+
 def get_capital_reduction(
     corp_code: Union[str, int],
     date: Union[str, int],
@@ -945,14 +1061,14 @@ dart_API_map = {
     "유무상증자 결정": None,  # DART API 없음
     "감자 결정": "crDecsn",  # DART API 없음
     "채권은행 등의 관리절차 개시": "bnkMngtPcbg",  # DART API 없음
-    "소송 등의 제기": "lwstLg",
+    "소송 등의 제기": "lwstLg",  # TODO: 성공 30 실패 311
     "해외 증권시장 주권등 상장 결정": "ovLstDecsn",  # DART API 없음
     "해외 증권시장 주권등 상장폐지 결정": "ovDlstDecsn",  # DART API 없음
     "해외 증권시장 주권등 상장": "ovLst",  # DART API 없음
     "해외 증권시장 주권등 상장폐지": "ovDlst",  # DART API 없음
     "전환사채권 발행결정": "cvbdIsDecsn",
     "신주인수권부사채권 발행결정": "bdwtIsDecsn",  # DART API 없음
-    "교환사채권 발행결정": "exbdIsDecsn",  # DART API 없음
+    "교환사채권 발행결정": "exbdIsDecsn",
     "채권은행 등의 관리절차 중단": "bnkMngtPcsp",  # DART API 없음
     "상각형 조건부자본증권 발행결정": "wdCocobdIsDecsn",  # DART API 없음
     "자기주식 취득 결정": "tsstkAqDecsn",
@@ -1007,14 +1123,14 @@ dart_API_function_map = {
     "유무상증자 결정": None,
     "감자 결정": get_capital_reduction,
     "채권은행 등의 관리절차 개시": None,
-    "소송 등의 제기": get_lawsuit_filing,
+    "소송 등의 제기": get_lawsuit_filing,  # TODO: 성공 30 실패 311
     "해외 증권시장 주권등 상장 결정": None,
     "해외 증권시장 주권등 상장폐지 결정": None,
     "해외 증권시장 주권등 상장": None,
     "해외 증권시장 주권등 상장폐지": None,
     "전환사채권 발행결정": get_convertible_bond,
     "신주인수권부사채권 발행결정": None,
-    "교환사채권 발행결정": None,
+    "교환사채권 발행결정": get_exchangeable_bond,
     "채권은행 등의 관리절차 중단": None,
     "상각형 조건부자본증권 발행결정": None,
     "자기주식 취득 결정": None,
