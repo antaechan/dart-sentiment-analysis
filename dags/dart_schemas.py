@@ -1735,4 +1735,133 @@ DISCLOSURE_SCHEMAS = {
             },
         ],
     },
+    "회사분할 결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "회사분할 결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "분할방법", "key": "dv_mth"},
+                    {"label": "분할의 중요영향 및 효과", "key": "dv_impef"},
+                    {"label": "분할비율", "key": "dv_rt"},
+                    {
+                        "label": "분할로 이전할 사업 및 재산의 내용",
+                        "key": "dv_trfbsnprt_cn",
+                    },
+                ],
+            },
+            {
+                "title": "분할 후 존속회사 정보",
+                "fields": [
+                    {"label": "회사명", "key": "atdv_excmp_cmpnm"},
+                    {"label": "주요사업", "key": "atdv_excmp_mbsn"},
+                    {
+                        "label": "분할 후 상장유지 여부",
+                        "key": "atdv_excmp_atdv_lstmn_atn",
+                    },
+                ],
+            },
+            {
+                "title": "분할 후 존속회사 분할후 재무내용",
+                "fields": [
+                    {
+                        "label": "자산총계(원)",
+                        "key": "atdvfdtl_tast",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "부채총계(원)",
+                        "key": "atdvfdtl_tdbt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자본총계(원)",
+                        "key": "atdvfdtl_teqt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자본금(원)",
+                        "key": "atdvfdtl_cpt",
+                        "format": "amount",
+                    },
+                    {"label": "현재기준", "key": "atdvfdtl_std"},
+                    {
+                        "label": "존속사업부문 최근 사업연도매출액(원)",
+                        "key": "atdv_excmp_exbsn_rsl",
+                        "format": "amount",
+                    },
+                ],
+            },
+            {
+                "title": "분할설립회사 정보",
+                "fields": [
+                    {"label": "회사명", "key": "dvfcmp_cmpnm"},
+                    {"label": "주요사업", "key": "dvfcmp_mbsn"},
+                    {"label": "재상장신청 여부", "key": "dvfcmp_rlst_atn"},
+                ],
+            },
+            {
+                "title": "분할설립회사 설립시 재무내용",
+                "fields": [
+                    {
+                        "label": "자산총계(원)",
+                        "key": "ffdtl_tast",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "부채총계(원)",
+                        "key": "ffdtl_tdbt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자본총계(원)",
+                        "key": "ffdtl_teqt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자본금(원)",
+                        "key": "ffdtl_cpt",
+                        "format": "amount",
+                    },
+                    {"label": "현재기준", "key": "ffdtl_std"},
+                    {
+                        "label": "신설사업부문 최근 사업연도 매출액(원)",
+                        "key": "dvfcmp_nbsn_rsl",
+                        "format": "amount",
+                    },
+                ],
+            },
+            {
+                "title": "감자에 관한 사항",
+                "fields": [
+                    {"label": "감자비율(%)", "key": "abcr_crrt"},
+                    {
+                        "label": "구주권 제출기간",
+                        "key": ["abcr_osprpd_bgd", "abcr_osprpd_edd"],
+                        "template": "{} ~ {}",
+                    },
+                    {
+                        "label": "매매거래정지 예정기간",
+                        "key": ["abcr_trspprpd_bgd", "abcr_trspprpd_edd"],
+                        "template": "{} ~ {}",
+                    },
+                    {"label": "신주배정조건", "key": "abcr_nstkascnd"},
+                    {
+                        "label": "주주 주식수 비례여부 및 사유",
+                        "key": "abcr_shstkcnt_rt_at_rs",
+                    },
+                    {"label": "신주배정기준일", "key": "abcr_nstkasstd"},
+                    {"label": "신주권교부예정일", "key": "abcr_nstkdlprd"},
+                    {"label": "신주의 상장예정일", "key": "abcr_nstklstprd"},
+                ],
+            },
+        ],
+    },
 }

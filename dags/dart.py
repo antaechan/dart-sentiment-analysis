@@ -385,7 +385,7 @@ dart_API_map = {
     "주권 관련 사채권 양수 결정": "stkrtbdInhDecsn",
     "주권 관련 사채권 양도 결정": "stkrtbdTrfDecsn",
     "회사합병 결정": "cmpMgDecsn",
-    "회사분할 결정": "cmpDvDecsn",  # DART API 없음
+    "회사분할 결정": "cmpDvDecsn",
     "회사분할합병 결정": "cmpDvmgDecsn",  # DART API 없음
     "주식교환·이전 결정": "stkExtrDecsn",  # DART API 없음
     "지분공시": None,  # DART API 없음
