@@ -2036,4 +2036,132 @@ DISCLOSURE_SCHEMAS = {
             },
         ],
     },
+    "자기주식 처분 결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "자기주식 처분 결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "처분목적", "key": "dp_pp"},
+                    {"label": "처분결정일", "key": "dp_dd"},
+                ],
+            },
+            {
+                "title": "처분예정 주식 및 금액",
+                "fields": [
+                    {
+                        "label": "처분예정주식(보통주식)(주)",
+                        "key": "dppln_stk_ostk",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "처분예정주식(기타주식)(주)",
+                        "key": "dppln_stk_estk",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "처분 대상 주식가격(보통주식)(원)",
+                        "key": "dpstk_prc_ostk",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "처분 대상 주식가격(기타주식)(원)",
+                        "key": "dpstk_prc_estk",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "처분예정금액(보통주식)(원)",
+                        "key": "dppln_prc_ostk",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "처분예정금액(기타주식)(원)",
+                        "key": "dppln_prc_estk",
+                        "format": "amount",
+                    },
+                ],
+            },
+            {
+                "title": "처분예정기간",
+                "fields": [
+                    {
+                        "label": "처분예정기간",
+                        "key": ["dpprpd_bgd", "dpprpd_edd"],
+                        "template": "{} ~ {}",
+                    },
+                ],
+            },
+            {
+                "title": "처분방법",
+                "fields": [
+                    {
+                        "label": "시장을 통한 매도(주)",
+                        "key": "dp_m_mkt",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "시간외대량매매(주)",
+                        "key": "dp_m_ovtm",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "장외처분(주)",
+                        "key": "dp_m_otc",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "기타(주)",
+                        "key": "dp_m_etc",
+                        "format": "shares",
+                    },
+                ],
+            },
+            {
+                "title": "처분 전 자기주식 보유현황",
+                "subsections": [
+                    {
+                        "title": "[배당가능이익 범위 내 취득]",
+                        "fields": [
+                            {
+                                "label": "  보통주식",
+                                "key": ["aq_wtn_div_ostk", "aq_wtn_div_ostk_rt"],
+                                "format": ["shares", "percent"],
+                                "template": "{} ({})",
+                            },
+                            {
+                                "label": "  기타주식",
+                                "key": ["aq_wtn_div_estk", "aq_wtn_div_estk_rt"],
+                                "format": ["shares", "percent"],
+                                "template": "{} ({})",
+                            },
+                        ],
+                    },
+                    {
+                        "title": "[기타취득]",
+                        "fields": [
+                            {
+                                "label": "  보통주식",
+                                "key": ["eaq_ostk", "eaq_ostk_rt"],
+                                "format": ["shares", "percent"],
+                                "template": "{} ({})",
+                            },
+                            {
+                                "label": "  기타주식",
+                                "key": ["eaq_estk", "eaq_estk_rt"],
+                                "format": ["shares", "percent"],
+                                "template": "{} ({})",
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    },
 }
