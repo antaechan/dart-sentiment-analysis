@@ -378,8 +378,8 @@ dart_API_map = {
     "자기주식취득 신탁계약 해지 결정": "tsstkAqTrctrCcDecsn",  # DART API 없음
     "영업양수 결정": "bsnInhDecsn",
     "영업양도 결정": "bsnTrfDecsn",
-    "유형자산 양수 결정": "tgastInhDecsn",  # DART API 없음
-    "유형자산 양도 결정": "tgastTrfDecsn",  # DART API 없음
+    "유형자산 양수 결정": "tgastInhDecsn",
+    "유형자산 양도 결정": "tgastTrfDecsn",
     "타법인 주식 및 출자증권 양수결정": "otcprStkInvscrInhDecsn",
     "타법인 주식 및 출자증권 양도결정": "otcprStkInvscrTrfDecsn",
     "주권 관련 사채권 양수 결정": "stkrtbdInhDecsn",  # DART API 없음

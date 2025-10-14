@@ -1020,7 +1020,6 @@ DISCLOSURE_SCHEMAS = {
             "corp_cls",
             "corp_code",
             "corp_name",
-            "ftc_stt_atn",
         },
         "sections": [
             {
@@ -1076,6 +1075,126 @@ DISCLOSURE_SCHEMAS = {
                     {"label": "양도예정일자(계약체결일)", "key": "trf_prd_ctr_cnsd"},
                     {"label": "양도예정일자(양도기준일)", "key": "trf_prd_trf_std"},
                     {"label": "양도대금지급", "key": "trf_pym"},
+                ],
+            },
+            {
+                "title": "거래상대방 정보",
+                "fields": [
+                    {"label": "회사명(성명)", "key": "dlptn_cmpnm"},
+                    {"label": "자본금(원)", "key": "dlptn_cpt", "format": "amount"},
+                    {"label": "주요사업", "key": "dlptn_mbsn"},
+                    {"label": "본점소재지(주소)", "key": "dlptn_hoadd"},
+                    {"label": "회사와의 관계", "key": "dlptn_rl_cmpn"},
+                ],
+            },
+        ],
+    },
+    "유형자산 양수 결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "유형자산 양수 결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "자산구분", "key": "ast_sen"},
+                    {"label": "자산명", "key": "ast_nm"},
+                ],
+            },
+            {
+                "title": "양수내역",
+                "fields": [
+                    {
+                        "label": "양수금액(원)",
+                        "key": "inhdtl_inhprc",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자산총액(원)",
+                        "key": "inhdtl_tast",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자산총액대비(%)",
+                        "key": "inhdtl_tast_vs",
+                        "format": "percent",
+                    },
+                ],
+            },
+            {
+                "title": "양수 관련 정보",
+                "fields": [
+                    {"label": "양수목적", "key": "inh_pp"},
+                    {"label": "양수영향", "key": "inh_af"},
+                    {"label": "양수예정일자(계약체결일)", "key": "inh_prd_ctr_cnsd"},
+                    {"label": "양수예정일자(양수기준일)", "key": "inh_prd_inh_std"},
+                    {"label": "양수예정일자(등기예정일)", "key": "inh_prd_rgs_prd"},
+                    {"label": "거래대금지급", "key": "dl_pym"},
+                ],
+            },
+            {
+                "title": "거래상대방 정보",
+                "fields": [
+                    {"label": "회사명(성명)", "key": "dlptn_cmpnm"},
+                    {"label": "자본금(원)", "key": "dlptn_cpt", "format": "amount"},
+                    {"label": "주요사업", "key": "dlptn_mbsn"},
+                    {"label": "본점소재지(주소)", "key": "dlptn_hoadd"},
+                    {"label": "회사와의 관계", "key": "dlptn_rl_cmpn"},
+                ],
+            },
+        ],
+    },
+    "유형자산 양도 결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "유형자산 양도 결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "자산구분", "key": "ast_sen"},
+                    {"label": "자산명", "key": "ast_nm"},
+                ],
+            },
+            {
+                "title": "양도내역",
+                "fields": [
+                    {
+                        "label": "양도금액(원)",
+                        "key": "trfdtl_trfprc",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자산총액(원)",
+                        "key": "trfdtl_tast",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자산총액대비(%)",
+                        "key": "trfdtl_tast_vs",
+                        "format": "percent",
+                    },
+                ],
+            },
+            {
+                "title": "양도 관련 정보",
+                "fields": [
+                    {"label": "양도목적", "key": "trf_pp"},
+                    {"label": "양도영향", "key": "trf_af"},
+                    {"label": "양도예정일자(계약체결일)", "key": "trf_prd_ctr_cnsd"},
+                    {"label": "양도예정일자(양도기준일)", "key": "trf_prd_trf_std"},
+                    {"label": "양도예정일자(등기예정일)", "key": "trf_prd_rgs_prd"},
+                    {"label": "거래대금지급", "key": "dl_pym"},
                 ],
             },
             {
