@@ -1864,4 +1864,77 @@ DISCLOSURE_SCHEMAS = {
             },
         ],
     },
+    "주식교환·이전 결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "주식교환·이전 결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "구분", "key": "extr_sen"},
+                    {"label": "교환·이전 형태", "key": "extr_stn"},
+                    {"label": "교환·이전 비율", "key": "extr_rt"},
+                    {"label": "교환·이전 비율 산출근거", "key": "extr_rt_bs"},
+                    {"label": "교환·이전 목적", "key": "extr_pp"},
+                ],
+            },
+            {
+                "title": "교환·이전 대상법인 정보",
+                "fields": [
+                    {"label": "회사명", "key": "extr_tgcmp_cmpnm"},
+                    {"label": "대표자", "key": "extr_tgcmp_rp"},
+                    {"label": "주요사업", "key": "extr_tgcmp_mbsn"},
+                    {"label": "회사와의 관계", "key": "extr_tgcmp_rl_cmpn"},
+                    {
+                        "label": "발행주식총수(보통주식)(주)",
+                        "key": "extr_tgcmp_tisstk_ostk",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "발행주식총수(종류주식)(주)",
+                        "key": "extr_tgcmp_tisstk_cstk",
+                        "format": "shares",
+                    },
+                ],
+            },
+            {
+                "title": "교환·이전 대상법인 최근 사업연도 요약재무내용",
+                "fields": [
+                    {
+                        "label": "자산총계(원)",
+                        "key": "rbsnfdtl_tast",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "부채총계(원)",
+                        "key": "rbsnfdtl_tdbt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자본총계(원)",
+                        "key": "rbsnfdtl_teqt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자본금(원)",
+                        "key": "rbsnfdtl_cpt",
+                        "format": "amount",
+                    },
+                ],
+            },
+            {
+                "title": "교환·이전 후 완전모회사 정보",
+                "optional": True,
+                "fields": [
+                    {"label": "완전모회사명", "key": "atextr_cpcmpnm"},
+                ],
+            },
+        ],
+    },
 }

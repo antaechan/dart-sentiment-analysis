@@ -387,7 +387,7 @@ dart_API_map = {
     "회사합병 결정": "cmpMgDecsn",
     "회사분할 결정": "cmpDvDecsn",
     "회사분할합병 결정": "cmpDvmgDecsn",  # DART API 없음
-    "주식교환·이전 결정": "stkExtrDecsn",  # DART API 없음
+    "주식교환·이전 결정": "stkExtrDecsn",
     "지분공시": None,  # DART API 없음
     "실적공시": None,  # DART API 없음
     "단일판매ㆍ공급계약해지": None,  # DART API 없음
