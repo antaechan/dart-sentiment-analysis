@@ -1615,4 +1615,124 @@ DISCLOSURE_SCHEMAS = {
             },
         ],
     },
+    "회사합병 결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "회사합병 결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "합병방법", "key": "mg_mth"},
+                    {"label": "합병형태", "key": "mg_stn"},
+                    {"label": "합병목적", "key": "mg_pp"},
+                    {"label": "합병비율", "key": "mg_rt"},
+                ],
+            },
+            {
+                "title": "합병신주의 종류와 수",
+                "fields": [
+                    {
+                        "label": "보통주식(주)",
+                        "key": "mgnstk_ostk_cnt",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "종류주식(주)",
+                        "key": "mgnstk_cstk_cnt",
+                        "format": "shares",
+                    },
+                ],
+            },
+            {
+                "title": "합병상대회사 정보",
+                "fields": [
+                    {"label": "회사명", "key": "mgptncmp_cmpnm"},
+                    {"label": "주요사업", "key": "mgptncmp_mbsn"},
+                    {"label": "회사와의 관계", "key": "mgptncmp_rl_cmpn"},
+                ],
+            },
+            {
+                "title": "합병상대회사 최근 사업연도 재무내용",
+                "fields": [
+                    {
+                        "label": "자산총계(원)",
+                        "key": "rbsnfdtl_tast",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "부채총계(원)",
+                        "key": "rbsnfdtl_tdbt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자본총계(원)",
+                        "key": "rbsnfdtl_teqt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자본금(원)",
+                        "key": "rbsnfdtl_cpt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "매출액(원)",
+                        "key": "rbsnfdtl_sl",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "당기순이익(원)",
+                        "key": "rbsnfdtl_nic",
+                        "format": "amount",
+                    },
+                ],
+            },
+            {
+                "title": "신설합병회사 정보",
+                "optional": True,
+                "fields": [
+                    {"label": "회사명", "key": "nmgcmp_cmpnm"},
+                    {"label": "주요사업", "key": "nmgcmp_mbsn"},
+                    {"label": "재상장신청 여부", "key": "nmgcmp_rlst_atn"},
+                ],
+            },
+            {
+                "title": "신설합병회사 설립시 재무내용",
+                "optional": True,
+                "fields": [
+                    {
+                        "label": "자산총계(원)",
+                        "key": "ffdtl_tast",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "부채총계(원)",
+                        "key": "ffdtl_tdbt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자본총계(원)",
+                        "key": "ffdtl_teqt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자본금(원)",
+                        "key": "ffdtl_cpt",
+                        "format": "amount",
+                    },
+                    {"label": "현재기준", "key": "ffdtl_std"},
+                    {
+                        "label": "신설사업부문 최근 사업연도 매출액(원)",
+                        "key": "nmgcmp_nbsn_rsl",
+                        "format": "amount",
+                    },
+                ],
+            },
+        ],
+    },
 }
