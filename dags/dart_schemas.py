@@ -1209,4 +1209,218 @@ DISCLOSURE_SCHEMAS = {
             },
         ],
     },
+    "타법인 주식 및 출자증권 양수결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "타법인 주식 및 출자증권 양수결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                ],
+            },
+            {
+                "title": "발행회사 정보",
+                "fields": [
+                    {"label": "발행회사(회사명)", "key": "iscmp_cmpnm"},
+                    {"label": "발행회사(국적)", "key": "iscmp_nt"},
+                    {"label": "발행회사(대표자)", "key": "iscmp_rp"},
+                    {
+                        "label": "발행회사(자본금(원))",
+                        "key": "iscmp_cpt",
+                        "format": "amount",
+                    },
+                    {"label": "발행회사(회사와 관계)", "key": "iscmp_rl_cmpn"},
+                    {
+                        "label": "발행회사(발행주식 총수(주))",
+                        "key": "iscmp_tisstk",
+                        "format": "shares",
+                    },
+                    {"label": "발행회사(주요사업)", "key": "iscmp_mbsn"},
+                    {
+                        "label": "최근 6월 이내 제3자 배정에 의한 신주취득 여부",
+                        "key": "l6m_tpa_nstkaq_atn",
+                    },
+                ],
+            },
+            {
+                "title": "양수내역",
+                "fields": [
+                    {
+                        "label": "양수주식수(주)",
+                        "key": "inhdtl_stkcnt",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "양수금액(원)(A)",
+                        "key": "inhdtl_inhprc",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "총자산(원)(B)",
+                        "key": "inhdtl_tast",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "총자산대비(%)(A/B)",
+                        "key": "inhdtl_tast_vs",
+                        "format": "percent",
+                    },
+                    {
+                        "label": "자기자본(원)(C)",
+                        "key": "inhdtl_ecpt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자기자본대비(%)(A/C)",
+                        "key": "inhdtl_ecpt_vs",
+                        "format": "percent",
+                    },
+                ],
+            },
+            {
+                "title": "양수후 소유주식수 및 지분비율",
+                "fields": [
+                    {
+                        "label": "소유주식수(주)",
+                        "key": "atinh_owstkcnt",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "지분비율(%)",
+                        "key": "atinh_eqrt",
+                        "format": "percent",
+                    },
+                ],
+            },
+            {
+                "title": "양수 관련 정보",
+                "fields": [
+                    {"label": "양수목적", "key": "inh_pp"},
+                    {"label": "양수예정일자", "key": "inh_prd"},
+                ],
+            },
+            {
+                "title": "거래상대방 정보",
+                "fields": [
+                    {"label": "회사명(성명)", "key": "dlptn_cmpnm"},
+                    {"label": "자본금(원)", "key": "dlptn_cpt", "format": "amount"},
+                    {"label": "주요사업", "key": "dlptn_mbsn"},
+                    {"label": "본점소재지(주소)", "key": "dlptn_hoadd"},
+                    {"label": "회사와의 관계", "key": "dlptn_rl_cmpn"},
+                    {"label": "거래대금지급", "key": "dl_pym"},
+                ],
+            },
+        ],
+    },
+    "타법인 주식 및 출자증권 양도결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "타법인 주식 및 출자증권 양도결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                ],
+            },
+            {
+                "title": "발행회사 정보",
+                "fields": [
+                    {"label": "발행회사(회사명)", "key": "iscmp_cmpnm"},
+                    {"label": "발행회사(국적)", "key": "iscmp_nt"},
+                    {"label": "발행회사(대표자)", "key": "iscmp_rp"},
+                    {
+                        "label": "발행회사(자본금(원))",
+                        "key": "iscmp_cpt",
+                        "format": "amount",
+                    },
+                    {"label": "발행회사(회사와 관계)", "key": "iscmp_rl_cmpn"},
+                    {
+                        "label": "발행회사(발행주식 총수(주))",
+                        "key": "iscmp_tisstk",
+                        "format": "shares",
+                    },
+                    {"label": "발행회사(주요사업)", "key": "iscmp_mbsn"},
+                ],
+            },
+            {
+                "title": "양도내역",
+                "fields": [
+                    {
+                        "label": "양도주식수(주)",
+                        "key": "trfdtl_stkcnt",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "양도금액(원)(A)",
+                        "key": "trfdtl_trfprc",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "총자산(원)(B)",
+                        "key": "trfdtl_tast",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "총자산대비(%)(A/B)",
+                        "key": "trfdtl_tast_vs",
+                        "format": "percent",
+                    },
+                    {
+                        "label": "자기자본(원)(C)",
+                        "key": "trfdtl_ecpt",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자기자본대비(%)(A/C)",
+                        "key": "trfdtl_ecpt_vs",
+                        "format": "percent",
+                    },
+                ],
+            },
+            {
+                "title": "양도후 소유주식수 및 지분비율",
+                "fields": [
+                    {
+                        "label": "소유주식수(주)",
+                        "key": "attrf_owstkcnt",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "지분비율(%)",
+                        "key": "attrf_eqrt",
+                        "format": "percent",
+                    },
+                ],
+            },
+            {
+                "title": "양도 관련 정보",
+                "fields": [
+                    {"label": "양도목적", "key": "trf_pp"},
+                    {"label": "양도예정일자", "key": "trf_prd"},
+                ],
+            },
+            {
+                "title": "거래상대방 정보",
+                "fields": [
+                    {"label": "회사명(성명)", "key": "dlptn_cmpnm"},
+                    {"label": "자본금(원)", "key": "dlptn_cpt", "format": "amount"},
+                    {"label": "주요사업", "key": "dlptn_mbsn"},
+                    {"label": "본점소재지(주소)", "key": "dlptn_hoadd"},
+                    {"label": "회사와의 관계", "key": "dlptn_rl_cmpn"},
+                    {"label": "거래대금지급", "key": "dl_pym"},
+                ],
+            },
+        ],
+    },
 }

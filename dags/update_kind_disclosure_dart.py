@@ -137,7 +137,7 @@ def fetch_and_update_disclosure_raw(
         "raw_update",
     ],
     params={
-        "disclosure_type": "유형자산 양도 결정",
+        "disclosure_type": "타법인 주식 및 출자증권 양도결정",
     },
 )
 def update_kind_disclosure_raw_dart_dag():
