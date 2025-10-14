@@ -1937,4 +1937,103 @@ DISCLOSURE_SCHEMAS = {
             },
         ],
     },
+    "자기주식 취득 결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "자기주식 취득 결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "취득목적", "key": "aq_pp"},
+                    {"label": "취득방법", "key": "aq_mth"},
+                    {"label": "취득결정일", "key": "aq_dd"},
+                ],
+            },
+            {
+                "title": "취득예정 주식 및 금액",
+                "fields": [
+                    {
+                        "label": "취득예정주식(보통주식)(주)",
+                        "key": "aqpln_stk_ostk",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "취득예정주식(기타주식)(주)",
+                        "key": "aqpln_stk_estk",
+                        "format": "shares",
+                    },
+                    {
+                        "label": "취득예정금액(보통주식)(원)",
+                        "key": "aqpln_prc_ostk",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "취득예정금액(기타주식)(원)",
+                        "key": "aqpln_prc_estk",
+                        "format": "amount",
+                    },
+                ],
+            },
+            {
+                "title": "취득 및 보유 예상기간",
+                "fields": [
+                    {
+                        "label": "취득예상기간",
+                        "key": ["aqexpd_bgd", "aqexpd_edd"],
+                        "template": "{} ~ {}",
+                    },
+                    {
+                        "label": "보유예상기간",
+                        "key": ["hdexpd_bgd", "hdexpd_edd"],
+                        "template": "{} ~ {}",
+                    },
+                ],
+            },
+            {
+                "title": "취득 전 자기주식 보유현황",
+                "subsections": [
+                    {
+                        "title": "[배당가능이익 범위 내 취득]",
+                        "fields": [
+                            {
+                                "label": "  보통주식",
+                                "key": ["aq_wtn_div_ostk", "aq_wtn_div_ostk_rt"],
+                                "format": ["shares", "percent"],
+                                "template": "{} ({})",
+                            },
+                            {
+                                "label": "  기타주식",
+                                "key": ["aq_wtn_div_estk", "aq_wtn_div_estk_rt"],
+                                "format": ["shares", "percent"],
+                                "template": "{} ({})",
+                            },
+                        ],
+                    },
+                    {
+                        "title": "[기타취득]",
+                        "fields": [
+                            {
+                                "label": "  보통주식",
+                                "key": ["eaq_ostk", "eaq_ostk_rt"],
+                                "format": ["shares", "percent"],
+                                "template": "{} ({})",
+                            },
+                            {
+                                "label": "  기타주식",
+                                "key": ["eaq_estk", "eaq_estk_rt"],
+                                "format": ["shares", "percent"],
+                                "template": "{} ({})",
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    },
 }
