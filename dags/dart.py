@@ -370,14 +370,14 @@ dart_API_map = {
     "신주인수권부사채권 발행결정": "bdwtIsDecsn",  # DART API 없음
     "교환사채권 발행결정": "exbdIsDecsn",
     "채권은행 등의 관리절차 중단": "bnkMngtPcsp",  # DART API 없음
-    "상각형 조건부자본증권 발행결정": "wdCocobdIsDecsn",  # DART API 없음
+    "상각형 조건부자본증권 발행결정": "wdCocobdIsDecsn",
     "자기주식 취득 결정": "tsstkAqDecsn",
     "자기주식 처분 결정": "tsstkDpDecsn",
     "자기주식 소각 결정": None,  # DART API 없음
     "자기주식취득 신탁계약 체결 결정": "tsstkAqTrctrCnsDecsn",
     "자기주식취득 신탁계약 해지 결정": "tsstkAqTrctrCcDecsn",  # DART API 없음
-    "영업양수 결정": "bsnInhDecsn",  # DART API 없음
-    "영업양도 결정": "bsnTrfDecsn",  # DART API 없음
+    "영업양수 결정": "bsnInhDecsn",
+    "영업양도 결정": "bsnTrfDecsn",
     "유형자산 양수 결정": "tgastInhDecsn",  # DART API 없음
     "유형자산 양도 결정": "tgastTrfDecsn",  # DART API 없음
     "타법인 주식 및 출자증권 양수결정": "otcprStkInvscrInhDecsn",

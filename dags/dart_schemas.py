@@ -798,4 +798,296 @@ DISCLOSURE_SCHEMAS = {
             },
         ],
     },
+    "상각형 조건부자본증권 발행결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "상각형 조건부자본증권 발행정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "사채의 종류(회차)", "key": "bd_tm"},
+                    {"label": "사채의 종류(종류)", "key": "bd_knd"},
+                    {
+                        "label": "사채의 권면(전자등록)총액 (원)",
+                        "key": "bd_fta",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "해외발행(권면(전자등록)총액)",
+                        "key": "ovis_fta",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "해외발행(권면(전자등록)총액(통화단위))",
+                        "key": "ovis_fta_crn",
+                    },
+                    {"label": "해외발행(기준환율등)", "key": "ovis_ster"},
+                    {"label": "해외발행(발행지역)", "key": "ovis_isar"},
+                    {"label": "해외발행(해외상장시 시장의 명칭)", "key": "ovis_mktnm"},
+                ],
+            },
+            {
+                "title": "자금조달의 목적",
+                "fields": [
+                    {"label": "시설자금 (원)", "key": "fdpp_fclt", "format": "amount"},
+                    {
+                        "label": "영업양수자금 (원)",
+                        "key": "fdpp_bsninh",
+                        "format": "amount",
+                    },
+                    {"label": "운영자금 (원)", "key": "fdpp_op", "format": "amount"},
+                    {
+                        "label": "채무상환자금 (원)",
+                        "key": "fdpp_dtrp",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "타법인 증권 취득자금 (원)",
+                        "key": "fdpp_ocsa",
+                        "format": "amount",
+                    },
+                    {"label": "기타자금 (원)", "key": "fdpp_etc", "format": "amount"},
+                ],
+            },
+            {
+                "title": "이자율 정보",
+                "fields": [
+                    {
+                        "label": "사채의 이율(표면이자율 (%))",
+                        "key": "bd_intr_ex",
+                        "format": "percent",
+                    },
+                    {
+                        "label": "사채의 이율(만기이자율 (%))",
+                        "key": "bd_intr_sf",
+                        "format": "percent",
+                    },
+                ],
+            },
+            {
+                "title": "발행 및 만기 정보",
+                "fields": [
+                    {"label": "사채만기일", "key": "bd_mtd"},
+                ],
+            },
+            {
+                "title": "채무재조정에 관한 사항",
+                "optional": True,
+                "fields": [
+                    {"label": "채무재조정의 범위", "key": "dbtrs_sc"},
+                ],
+            },
+            {
+                "title": "일정",
+                "fields": [
+                    {"label": "청약일", "key": "sbd"},
+                    {"label": "납입일", "key": "pymd"},
+                ],
+            },
+            {
+                "title": "기타정보",
+                "fields": [
+                    {"label": "대표주관회사", "key": "rpmcmp", "optional": True},
+                    {"label": "보증기관", "key": "grint", "optional": True},
+                    {"label": "이사회결의일(결정일)", "key": "bddd"},
+                    {
+                        "label": "사외이사 참석여부(참석 (명))",
+                        "key": "od_a_at_t",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "사외이사 참석여부(불참 (명))",
+                        "key": "od_a_at_b",
+                        "format": "amount",
+                    },
+                    {"label": "감사(감사위원) 참석여부", "key": "adt_a_atn"},
+                    {"label": "증권신고서 제출대상 여부", "key": "rs_sm_atn"},
+                    {
+                        "label": "제출을 면제받은 경우 그 사유",
+                        "key": "ex_sm_r",
+                        "optional": True,
+                    },
+                    {
+                        "label": "당해 사채의 해외발행과 연계된 대차거래 내역",
+                        "key": "ovis_ltdtl",
+                        "optional": True,
+                    },
+                    {"label": "공정거래위원회 신고대상 여부", "key": "ftc_stt_atn"},
+                ],
+            },
+        ],
+    },
+    "영업양수 결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "영업양수 결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "양수영업", "key": "inh_bsn"},
+                    {"label": "양수영업 주요내용", "key": "inh_bsn_mc"},
+                    {"label": "양수가액(원)", "key": "inh_prc", "format": "amount"},
+                    {"label": "영업전부의 양수 여부", "key": "absn_inh_atn"},
+                ],
+            },
+            {
+                "title": "재무내용",
+                "fields": [
+                    {
+                        "label": "자산액(양수대상 영업부문(A))",
+                        "key": "ast_inh_bsn",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자산액(당사전체(B))",
+                        "key": "ast_cmp_all",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자산액(비중(%)(A/B))",
+                        "key": "ast_rt",
+                        "format": "percent",
+                    },
+                    {
+                        "label": "매출액(양수대상 영업부문(A))",
+                        "key": "sl_inh_bsn",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "매출액(당사전체(B))",
+                        "key": "sl_cmp_all",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "매출액(비중(%)(A/B))",
+                        "key": "sl_rt",
+                        "format": "percent",
+                    },
+                    {
+                        "label": "부채액(양수대상 영업부문(A))",
+                        "key": "dbt_inh_bsn",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "부채액(당사전체(B))",
+                        "key": "dbt_cmp_all",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "부채액(비중(%)(A/B))",
+                        "key": "dbt_rt",
+                        "format": "percent",
+                    },
+                ],
+            },
+            {
+                "title": "양수 관련 정보",
+                "fields": [
+                    {"label": "양수목적", "key": "inh_pp"},
+                    {"label": "양수영향", "key": "inh_af"},
+                    {"label": "양수예정일자(계약체결일)", "key": "inh_prd_ctr_cnsd"},
+                    {"label": "양수예정일자(양수기준일)", "key": "inh_prd_inh_std"},
+                    {"label": "양수대금지급", "key": "inh_pym"},
+                ],
+            },
+            {
+                "title": "거래상대방 정보",
+                "fields": [
+                    {"label": "회사명(성명)", "key": "dlptn_cmpnm"},
+                    {"label": "자본금(원)", "key": "dlptn_cpt", "format": "amount"},
+                    {"label": "주요사업", "key": "dlptn_mbsn"},
+                    {"label": "본점소재지(주소)", "key": "dlptn_hoadd"},
+                    {"label": "회사와의 관계", "key": "dlptn_rl_cmpn"},
+                ],
+            },
+        ],
+    },
+    "영업양도 결정": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+            "ftc_stt_atn",
+        },
+        "sections": [
+            {
+                "title": "영업양도 결정 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "양도영업", "key": "trf_bsn"},
+                    {"label": "양도영업 주요내용", "key": "trf_bsn_mc"},
+                    {"label": "양도가액(원)", "key": "trf_prc", "format": "amount"},
+                ],
+            },
+            {
+                "title": "재무내용",
+                "fields": [
+                    {
+                        "label": "자산액(양도대상 영업부문(A))",
+                        "key": "ast_trf_bsn",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자산액(당사전체(B))",
+                        "key": "ast_cmp_all",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "자산액(비중(%)(A/B))",
+                        "key": "ast_rt",
+                        "format": "percent",
+                    },
+                    {
+                        "label": "매출액(양도대상 영업부문(A))",
+                        "key": "sl_trf_bsn",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "매출액(당사전체(B))",
+                        "key": "sl_cmp_all",
+                        "format": "amount",
+                    },
+                    {
+                        "label": "매출액(비중(%)(A/B))",
+                        "key": "sl_rt",
+                        "format": "percent",
+                    },
+                ],
+            },
+            {
+                "title": "양도 관련 정보",
+                "fields": [
+                    {"label": "양도목적", "key": "trf_pp"},
+                    {"label": "양도영향", "key": "trf_af"},
+                    {"label": "양도예정일자(계약체결일)", "key": "trf_prd_ctr_cnsd"},
+                    {"label": "양도예정일자(양도기준일)", "key": "trf_prd_trf_std"},
+                    {"label": "양도대금지급", "key": "trf_pym"},
+                ],
+            },
+            {
+                "title": "거래상대방 정보",
+                "fields": [
+                    {"label": "회사명(성명)", "key": "dlptn_cmpnm"},
+                    {"label": "자본금(원)", "key": "dlptn_cpt", "format": "amount"},
+                    {"label": "주요사업", "key": "dlptn_mbsn"},
+                    {"label": "본점소재지(주소)", "key": "dlptn_hoadd"},
+                    {"label": "회사와의 관계", "key": "dlptn_rl_cmpn"},
+                ],
+            },
+        ],
+    },
 }
