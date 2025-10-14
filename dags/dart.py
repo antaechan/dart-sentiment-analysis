@@ -351,7 +351,7 @@ dart_API_map = {
     "임상 계획 신청": None,  # DART API 없음
     "임상 계획 승인": None,  # DART API 없음
     "임상 계획 결과 발표": None,  # DART API 없음
-    "자산양수도(기타), 풋백옵션": "astInhtrfEtcPtbkOpt",  # DART API 없음
+    "자산양수도(기타), 풋백옵션": "astInhtrfEtcPtbkOpt",
     "부도발생": None,  # DART API 없음
     "영업정지": "bsnSp",
     "회생절차 개시신청": "ctrcvsBgrq",

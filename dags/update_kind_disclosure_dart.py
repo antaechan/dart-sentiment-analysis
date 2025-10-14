@@ -137,7 +137,7 @@ def fetch_and_update_disclosure_raw(
         "raw_update",
     ],
     params={
-        "disclosure_type": "자기주식 처분 결정",
+        "disclosure_type": "자산양수도(기타), 풋백옵션",
     },
 )
 def update_kind_disclosure_raw_dart_dag():

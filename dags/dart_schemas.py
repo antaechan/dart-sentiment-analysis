@@ -2164,4 +2164,27 @@ DISCLOSURE_SCHEMAS = {
             },
         ],
     },
+    "자산양수도(기타), 풋백옵션": {
+        "excluded_fields": {
+            "rcept_no",
+            "corp_cls",
+            "corp_code",
+            "corp_name",
+        },
+        "sections": [
+            {
+                "title": "자산양수도(기타), 풋백옵션 정보",
+                "separator": True,
+                "fields": [
+                    {"label": "공시대상회사명", "key": "corp_name"},
+                    {"label": "보고 사유", "key": "rp_rsn"},
+                    {
+                        "label": "자산양수·도 가액(원)",
+                        "key": "ast_inhtrf_prc",
+                        "format": "amount",
+                    },
+                ],
+            },
+        ],
+    },
 }
