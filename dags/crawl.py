@@ -128,7 +128,7 @@ def format_table_patent_rights(table: BeautifulSoup) -> str:
         import re
 
         if re.fullmatch(
-            r"(투자\s*유의사항|※\s*관련\s*공시|-사외이사\s*참석여부)", main
+            r"(투자\s*유의사항|※\s*관련\s*공시|-?\s*사외이사\s*참석\s*여부)", main
         ):
             continue
 
@@ -206,12 +206,12 @@ crawling_function_map = {
     "자기주식취득 신탁계약 해지 결정": None,
     "영업양수 결정": None,
     "영업양도 결정": None,
-    "유형자산 양수 결정": None,
-    "유형자산 양도 결정": None,
+    "유형자산 양수 결정": format_table_patent_rights,
+    "유형자산 양도 결정": format_table_patent_rights,
     "타법인 주식 및 출자증권 양수결정": format_table_patent_rights,
     "타법인 주식 및 출자증권 양도결정": format_table_patent_rights,
-    "주권 관련 사채권 양수 결정": None,
-    "주권 관련 사채권 양도 결정": None,
+    "주권 관련 사채권 양수 결정": format_table_patent_rights,
+    "주권 관련 사채권 양도 결정": format_table_patent_rights,
     "회사합병 결정": None,
     "회사분할 결정": None,
     "회사분할합병 결정": None,

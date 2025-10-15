@@ -127,7 +127,7 @@ def fetch_and_update_disclosure_raw(
         "raw_update",
     ],
     params={
-        "disclosure_type": "유상증자 결정",
+        "disclosure_type": "주권 관련 사채권 양도 결정",
     },
 )
 def update_kind_disclosure_raw_dag():

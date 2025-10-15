@@ -234,31 +234,18 @@ def extract_table_content(html: str, table_formatter=None) -> str:
     """
     soup = BeautifulSoup(html, "lxml")
 
-    # 1) XFormD50_Form0_Table1 최우선
-    table = soup.find("table", {"id": "XFormD50_Form0_Table1"})
+    # id 없이 모든 table을 찾는다
+    tables = soup.find_all("table")
 
-    # 2) XFormD1_Form0_Table0 차순위
-    if not table:
-        table = soup.find("table", {"id": "XFormD1_Form0_Table0"})
+    # tr 개수가 1개인 table 또는 class에 'nb'가 명시적으로 있을 때만 필터(그 외 class 미정의 OK)
+    def _has_nb_class(tbl):
+        cls = tbl.get("class")
+        return cls is not None and "nb" in cls
 
-    if not table:
-        table = soup.find("table", {"id": "XFormD6_Form0_Table0"})
-
-    if not table:
-        table = soup.find("table", {"id": "XFormD10_Form0_Table0"})
-
-    if not table:
-        tables = soup.find_all("table", {"id": "XFormD2_Form0_Table0"})
-        if tables:
-            table = tables[0]
-            if len(tables) >= 2:
-                table = tables[1]
-
-    # 3) 첫 번째 테이블 폴백
-    if not table:
-        all_tables = soup.find_all("table")
-        if all_tables:
-            table = all_tables[0]
+    tables = [
+        tbl for tbl in tables if len(tbl.find_all("tr")) > 1 and not _has_nb_class(tbl)
+    ]
+    table = tables[0] if tables else None
 
     # 4) 테이블이 있고 formatter가 제공되면 사용
     if table and table_formatter:
