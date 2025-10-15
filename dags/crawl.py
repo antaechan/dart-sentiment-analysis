@@ -127,7 +127,9 @@ def format_table_patent_rights(table: BeautifulSoup) -> str:
 
         import re
 
-        if re.fullmatch(r"(투자\s*유의사항|※\s*관련\s*공시)", main):
+        if re.fullmatch(
+            r"(투자\s*유의사항|※\s*관련\s*공시|-사외이사\s*참석여부)", main
+        ):
             continue
 
         if len(tds) == 1:
@@ -138,18 +140,29 @@ def format_table_patent_rights(table: BeautifulSoup) -> str:
             output_lines.append(f"{main}: {tds[1]}")
             continue
 
-        details = []
-        for i in range(1, len(tds)):
-            if i % 2 == 1 and i + 1 < len(tds):
-                name = tds[i]
-                value = tds[i + 1]
-                if name and name != "-":
-                    details.append(f"{name}: {value}")
+        # 짝수 개의 셀이 있으면 main 포함해서 모든 셀을 key:value 쌍으로 처리
+        if len(tds) > 2 and len(tds) % 2 == 0:
+            details = []
+            for i in range(0, len(tds), 2):
+                key = tds[i]
+                value = tds[i + 1] if i + 1 < len(tds) else ""
+                if key and key != "-":
+                    details.append(f"{key}: {value}")
                 else:
                     details.append(value)
-            elif i % 2 == 1 and i + 1 == len(tds):
-                # 마지막 남은 항목 처리(이름만 남음)
-                details.append(tds[i])
+            if details:
+                output_lines.extend(details)
+            continue
+
+        # 홀수 개의 셀이 있으면 1번부터 2개씩 key-value로 파싱
+        details = []
+        for i in range(1, len(tds), 2):
+            key = tds[i]
+            value = tds[i + 1] if i + 1 < len(tds) else ""
+            if key and key != "-":
+                details.append(f"{key}: {value}")
+            else:
+                details.append(value)
 
         if details:
             output_lines.append(main)
@@ -195,8 +208,8 @@ crawling_function_map = {
     "영업양도 결정": None,
     "유형자산 양수 결정": None,
     "유형자산 양도 결정": None,
-    "타법인 주식 및 출자증권 양수결정": None,
-    "타법인 주식 및 출자증권 양도결정": None,
+    "타법인 주식 및 출자증권 양수결정": format_table_patent_rights,
+    "타법인 주식 및 출자증권 양도결정": format_table_patent_rights,
     "주권 관련 사채권 양수 결정": None,
     "주권 관련 사채권 양도 결정": None,
     "회사합병 결정": None,
