@@ -37,6 +37,9 @@ ENGINE = sa.create_engine(DB_URL, pool_pre_ping=True, future=True)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# 테이블명 상수
+DISCLOSURE_EVENTS_TABLE = "disclosure_events"
+
 SYSTEM_PROMPT = (
     "You are a helpful assistant to summarize the given text about a Korean corporate "
     "report within 2~3 sentences. Please respond only in Korean."
@@ -96,14 +99,13 @@ def summarize_disclosure_events_batch_dag():
     ) -> list[dict]:
         """여기서 문자열 → datetime은 DB 쿼리 바인딩 직전에만 변환해도 되지만,
         우리는 그냥 문자열 그대로 바인딩(타임존 변환이 SQL안에서 처리되므로 OK)"""
-        sql = """
+        sql = f"""
             SELECT id, raw
-            FROM disclosure_events
+            FROM {DISCLOSURE_EVENTS_TABLE}
             WHERE raw IS NOT NULL
               AND raw <> ''
               AND disclosed_at AT TIME ZONE 'Asia/Seoul' >= :start_date
               AND disclosed_at AT TIME ZONE 'Asia/Seoul' <= :end_date
-            ORDER BY disclosed_at, id
         """
         with ENGINE.connect() as conn:
             # 문자열(ISO) 그대로 바인딩 → DB 드라이버가 timestamp로 캐스팅
@@ -214,8 +216,8 @@ def summarize_disclosure_events_batch_dag():
             for s in summaries:
                 conn.execute(
                     sa.text(
-                        """
-                        UPDATE disclosure_events
+                        f"""
+                        UPDATE {DISCLOSURE_EVENTS_TABLE}
                            SET summary_kr = :summary
                          WHERE id = :id
                         """
