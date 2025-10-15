@@ -125,6 +125,11 @@ def format_table_patent_rights(table: BeautifulSoup) -> str:
         if not main:
             continue
 
+        import re
+
+        if re.fullmatch(r"(투자\s*유의사항|※\s*관련\s*공시)", main):
+            continue
+
         if len(tds) == 1:
             output_lines.append(main)
             continue
@@ -157,10 +162,10 @@ def format_table_patent_rights(table: BeautifulSoup) -> str:
 
 # config.py의 keywords 키와 DART API 명칭 매핑
 crawling_function_map = {
-    "임상 계획 철회": None,
-    "임상 계획 신청": None,
-    "임상 계획 승인": None,
-    "임상 계획 결과 발표": None,
+    "임상 계획 철회": format_table_patent_rights,
+    "임상 계획 신청": format_table_patent_rights,
+    "임상 계획 승인": format_table_patent_rights,
+    "임상 계획 결과 발표": format_table_patent_rights,
     "자산양수도(기타), 풋백옵션": None,
     "부도발생": None,
     "영업정지": None,
@@ -183,7 +188,7 @@ crawling_function_map = {
     "상각형 조건부자본증권 발행결정": None,
     "자기주식 취득 결정": None,
     "자기주식 처분 결정": None,
-    "자기주식 소각 결정": None,
+    "자기주식 소각 결정": format_table_patent_rights,
     "자기주식취득 신탁계약 체결 결정": None,
     "자기주식취득 신탁계약 해지 결정": None,
     "영업양수 결정": None,
@@ -210,9 +215,9 @@ crawling_function_map = {
     "신규시설투자": format_table_patent_rights,
     "기술이전계약해지": format_table_patent_rights,
     "기술이전계약체결": format_table_patent_rights,
-    "품목허가 철회": None,
-    "품목허가 신청": None,
-    "품목허가 승인": None,
+    "품목허가 철회": format_table_patent_rights,
+    "품목허가 신청": format_table_patent_rights,
+    "품목허가 승인": format_table_patent_rights,
     "횡령ㆍ배임혐의발생": format_table_patent_rights,
     "공개매수": None,
 }
