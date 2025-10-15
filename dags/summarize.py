@@ -8,13 +8,13 @@ PostgreSQL `disclosure_events.summary_kr` 컬럼에 저장한다.
   ❷ 대상 조회 → ❸ JSONL 업로드 → ❹ Batch Job 생성 →
   ❺ 완료 대기 → ❻ 결과 다운로드 → ❼ DB 업데이트
 """
-
+import io
 import json
 import os
 import tempfile
 import time
 from datetime import datetime, timedelta
-
+from zoneinfo import ZoneInfo
 import sqlalchemy as sa
 from airflow.decorators import dag, task
 from dotenv import load_dotenv
@@ -38,13 +38,16 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 테이블명 상수
-DISCLOSURE_EVENTS_TABLE = "disclosure_events"
+DISCLOSURE_EVENTS_TABLE = "kind"
 
 SYSTEM_PROMPT = (
     "You are a helpful assistant to summarize the given text about a Korean corporate "
     "report within 2~3 sentences. Please respond only in Korean."
 )
 MODEL = "gpt-4.1-nano"
+
+KST = ZoneInfo("Asia/Seoul")
+UTC = ZoneInfo("UTC")
 
 
 @dag(
@@ -54,21 +57,36 @@ MODEL = "gpt-4.1-nano"
     tags=["openai", "summarize", "batch"],
     max_active_tasks=1,
     # DAG 기본 파라미터는 문자열로! (JSON-serializable)
-    params={"start_date": "2023-04-01", "end_date": "2023-05-31"},
+    params={"start_date": "2021-01-01", "end_date": "2021-01-31"},
 )
 def summarize_disclosure_events_batch_dag():
     """일괄 Batch 요약 DAG (월 단위 청크 처리)"""
 
     @task(task_id="build_month_ranges")
     def build_month_ranges(start_date_str: str, end_date_str: str) -> list[dict]:
-        """문자열 → 내부에서 datetime 파싱, 결과는 다시 문자열로 반환 (XCom 안전)"""
-        # 파싱
+        """
+        입력 문자열(일자/ISO)을 KST로 해석해 '월 단위' 경계를 만든 뒤,
+        각 구간의 시작/끝을 UTC로 변환해 ISO 문자열로 반환.
+        (DB는 disclosed_at UTC 저장이므로 UTC 경계가 인덱스 친화적)
+        """
+        # KST로 파싱
         start_dt = datetime.fromisoformat(start_date_str)
-        # end는 날짜만 들어오면 그 날의 23:59:59로 해석
         end_base = datetime.fromisoformat(end_date_str)
-        end_dt = end_base.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-        # 월별 구간 계산
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=KST)
+        else:
+            start_dt = start_dt.astimezone(KST)
+
+        if end_base.tzinfo is None:
+            end_dt = end_base.replace(
+                hour=23, minute=59, second=59, microsecond=999999, tzinfo=KST
+            )
+        else:
+            # 이미 시간이 있다면 그 시간 기준으로 KST에 정렬 후 미세 조정 없음
+            end_dt = end_base.astimezone(KST)
+
+        # 월별 구간 (KST 기준)
         def first_of_month(dt: datetime) -> datetime:
             return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -81,16 +99,20 @@ def summarize_disclosure_events_batch_dag():
         out: list[dict] = []
         while cur <= end_dt:
             next_first = first_of_next_month(cur)
-            start = max(cur, start_dt)
-            end = min(end_dt, next_first - timedelta(microseconds=1))
-            # ✅ 반환은 문자열(ISO)로
-            out.append({"start_date": start.isoformat(), "end_date": end.isoformat()})
+            kst_start = max(cur, start_dt)
+            kst_end = min(end_dt, next_first - timedelta(microseconds=1))
+
+            # ✅ DB 비교용 UTC 경계로 변환해 ISO 문자열로 반환
+            utc_start = kst_start.astimezone(UTC).isoformat()
+            utc_end = kst_end.astimezone(UTC).isoformat()
+
+            out.append({"start_date": utc_start, "end_date": utc_end})
             cur = next_first
 
         print(
-            f"Generated {len(out)} month ranges from {start_date_str} to {end_date_str}"
+            f"Generated {len(out)} month ranges (KST→UTC) from {start_date_str} to {end_date_str}"
         )
-        print(f"First range: {out[0] if out else 'None'}")
+        print(f"First UTC range: {out[0] if out else 'None'}")
         return out
 
     @task(task_id="fetch_events_to_summarize")
@@ -99,22 +121,33 @@ def summarize_disclosure_events_batch_dag():
     ) -> list[dict]:
         """여기서 문자열 → datetime은 DB 쿼리 바인딩 직전에만 변환해도 되지만,
         우리는 그냥 문자열 그대로 바인딩(타임존 변환이 SQL안에서 처리되므로 OK)"""
+
+        s = datetime.fromisoformat(start_date)
+        e = datetime.fromisoformat(end_date)
+        if s.tzinfo is None:
+            s = s.replace(tzinfo=UTC)
+        else:
+            s = s.astimezone(UTC)
+        if e.tzinfo is None:
+            e = e.replace(tzinfo=UTC)
+        else:
+            e = e.astimezone(UTC)
+
         sql = f"""
             SELECT id, raw
             FROM {DISCLOSURE_EVENTS_TABLE}
             WHERE raw IS NOT NULL
-              AND raw <> ''
-              AND disclosed_at AT TIME ZONE 'Asia/Seoul' >= :start_date
-              AND disclosed_at AT TIME ZONE 'Asia/Seoul' <= :end_date
+            AND raw <> ''
+            AND disclosed_at BETWEEN :utc_start AND :utc_end
         """
         with ENGINE.connect() as conn:
-            # 문자열(ISO) 그대로 바인딩 → DB 드라이버가 timestamp로 캐스팅
-            result = conn.execute(
-                sa.text(sql), {"start_date": start_date, "end_date": end_date}
-            )
+            result = conn.execute(sa.text(sql), {"utc_start": s, "utc_end": e})
             events = [{"id": row.id, "raw": row.raw} for row in result]
-            print(f"Fetched {len(events)} events for period {start_date} to {end_date}")
-            return events
+
+        print(
+            f"Fetched {len(events)} events for UTC period {s.isoformat()} → {e.isoformat()}"
+        )
+        return events
 
     # ④ JSONL 파일 작성 & OpenAI 업로드(월별)
     @task(task_id="upload_batch_file")
@@ -136,6 +169,7 @@ def summarize_disclosure_events_batch_dag():
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": ev["raw"]},
                         ],
+                        "max_tokens": 128,
                     },
                 }
                 fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -209,22 +243,67 @@ def summarize_disclosure_events_batch_dag():
     # ⑦ DB 업데이트(월별)
     @task(task_id="update_summaries")
     def update_summarize(summaries: list[dict]) -> None:
+        """
+        벌크 업데이트: 임시테이블에 COPY로 적재 → UPDATE ... FROM 로 한번에 반영
+        - 루프 UPDATE 제거로 왕복/락/플랜 비용 대폭 절감
+        """
+
         if not summaries:
             print("No summaries to update")
             return
+
+        # 1) 메모리에서 탭 구분값(TSV) 생성 (COPY용)
+        #    탭/개행은 COPY에서 문제되므로 공백으로 정규화
+        buf = io.StringIO()
+        count = 0
+        for s in summaries:
+            sid = int(s["id"])
+            summary = (
+                (s.get("summary") or "").replace("\t", " ").replace("\n", " ").strip()
+            )
+            buf.write(f"{sid}\t{summary}\n")
+            count += 1
+        buf.seek(0)
+
+        # 2) 트랜잭션 내에서: 임시테이블 생성 → COPY → UPDATE ... FROM
         with ENGINE.begin() as conn:
-            for s in summaries:
-                conn.execute(
-                    sa.text(
-                        f"""
-                        UPDATE {DISCLOSURE_EVENTS_TABLE}
-                           SET summary_kr = :summary
-                         WHERE id = :id
-                        """
-                    ),
-                    {"summary": s["summary"], "id": s["id"]},
+            # 임시테이블 (트랜잭션 끝나면 자동 제거)
+            conn.execute(
+                sa.text(
+                    """
+                CREATE TEMP TABLE tmp_sum (
+                    id BIGINT PRIMARY KEY,
+                    summary TEXT
+                ) ON COMMIT DROP;
+            """
                 )
-        print(f"Updated {len(summaries)} rows.")
+            )
+
+            # DBAPI 커넥션 꺼내서 고속 COPY 수행
+            # SQLAlchemy 2.x: driver_connection으로 DBAPI 커넥션 접근
+            dbapi_conn = conn.connection.driver_connection
+            with dbapi_conn.cursor() as cur:
+                # 기본 TEXT COPY (탭 구분) 사용
+                cur.copy_from(
+                    file=buf,
+                    table="tmp_sum",
+                    sep="\t",
+                    columns=("id", "summary"),
+                )
+
+            # 3) 한 방 UPDATE
+            conn.execute(
+                sa.text(
+                    f"""
+                UPDATE {DISCLOSURE_EVENTS_TABLE} AS d
+                SET summary_kr = t.summary
+                FROM tmp_sum AS t
+                WHERE d.id = t.id;
+            """
+                )
+            )
+
+        print(f"Bulk-updated {count} rows.")
 
     # 템플릿으로 문자열 파라미터 주입
     month_ranges = build_month_ranges(
