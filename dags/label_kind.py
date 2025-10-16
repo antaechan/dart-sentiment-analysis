@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 """
-masked된 공시 텍스트에서 해당 공시가 발표된 후 주가에 미칠 영향을 판단하여 0(positive), 1(negative)로 라벨링한다.
+kind 테이블에서 masked된 공시 텍스트에서 해당 공시가 발표된 후 주가에 미칠 영향을 판단하여 1(positive), 0(neutral), -1(negative)로 라벨링한다.
 """
 
+import io
 import json
 import os
 import tempfile
 import time
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from airflow.decorators import dag, task
@@ -33,8 +35,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 라벨링을 위한 시스템 프롬프트
-LABELING_SYSTEM_PROMPT = "You will analyze Korean corporate disclosure texts to determine the expected impact on stock prices after the disclosure. If the disclosure is expected to have a positive impact on stock prices, respond with '0'. If it is expected to have a neutral impact, respond with '1'. If it is expected to have a negative impact, respond with '2'. Return only the number without any further explanation."
+LABELING_SYSTEM_PROMPT = "You will analyze Korean corporate disclosure texts to determine the expected impact on stock prices after the disclosure. If the disclosure is expected to have a positive impact on stock prices, respond with '1'. If it is expected to have a neutral impact, respond with '0'. If it is expected to have a negative impact, respond with '-1'. Return only the number without any further explanation."
 MODEL = "gpt-4.1-nano"
+
+KST = ZoneInfo("Asia/Seoul")
+UTC = ZoneInfo("UTC")
 
 
 @dag(
@@ -49,16 +54,49 @@ MODEL = "gpt-4.1-nano"
 def label_disclosure_events_by_gpt_batch_dag():
     """일괄 Batch GPT로 라벨링 DAG (월 단위 청크 처리)"""
 
+    @task(task_id="alter_kind_table")
+    def alter_kind_table_if_not_exists() -> None:
+        """kind 테이블에 label 필드가 없으면 추가하고 기존 데이터에 NULL 값 설정"""
+        sql = """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'kind' AND column_name = 'label'
+                ) THEN
+                    ALTER TABLE kind ADD COLUMN label INTEGER DEFAULT NULL;
+                END IF;
+            END $$;
+        """
+        with ENGINE.begin() as conn:
+            conn.execute(sa.text(sql))
+        print("Checked and added label column to kind table if needed")
+
     @task(task_id="build_month_ranges")
     def build_month_ranges(start_date_str: str, end_date_str: str) -> list[dict]:
-        """문자열 → 내부에서 datetime 파싱, 결과는 다시 문자열로 반환 (XCom 안전)"""
-        # 파싱
+        """
+        입력 문자열(일자/ISO)을 KST로 해석해 '월 단위' 경계를 만든 뒤,
+        각 구간의 시작/끝을 UTC로 변환해 ISO 문자열로 반환.
+        (DB는 disclosed_at UTC 저장이므로 UTC 경계가 인덱스 친화적)
+        """
+        # KST로 파싱
         start_dt = datetime.fromisoformat(start_date_str)
-        # end는 날짜만 들어오면 그 날의 23:59:59로 해석
         end_base = datetime.fromisoformat(end_date_str)
-        end_dt = end_base.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-        # 월별 구간 계산
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=KST)
+        else:
+            start_dt = start_dt.astimezone(KST)
+
+        if end_base.tzinfo is None:
+            end_dt = end_base.replace(
+                hour=23, minute=59, second=59, microsecond=999999, tzinfo=KST
+            )
+        else:
+            # 이미 시간이 있다면 그 시간 기준으로 KST에 정렬 후 미세 조정 없음
+            end_dt = end_base.astimezone(KST)
+
+        # 월별 구간 (KST 기준)
         def first_of_month(dt: datetime) -> datetime:
             return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -71,43 +109,55 @@ def label_disclosure_events_by_gpt_batch_dag():
         out: list[dict] = []
         while cur <= end_dt:
             next_first = first_of_next_month(cur)
-            start = max(cur, start_dt)
-            end = min(end_dt, next_first - timedelta(microseconds=1))
-            # ✅ 반환은 문자열(ISO)로
-            out.append({"start_date": start.isoformat(), "end_date": end.isoformat()})
+            kst_start = max(cur, start_dt)
+            kst_end = min(end_dt, next_first - timedelta(microseconds=1))
+
+            # ✅ DB 비교용 UTC 경계로 변환해 ISO 문자열로 반환
+            utc_start = kst_start.astimezone(UTC).isoformat()
+            utc_end = kst_end.astimezone(UTC).isoformat()
+
+            out.append({"start_date": utc_start, "end_date": utc_end})
             cur = next_first
 
         print(
-            f"Generated {len(out)} month ranges from {start_date_str} to {end_date_str}"
+            f"Generated {len(out)} month ranges (KST→UTC) from {start_date_str} to {end_date_str}"
         )
-        print(f"First range: {out[0] if out else 'None'}")
+        print(f"First UTC range: {out[0] if out else 'None'}")
         return out
 
     @task(task_id="fetch_masked_events")
     def fetch_masked_events(
         start_date: str | None = None, end_date: str | None = None
     ) -> list[dict]:
-        """label 테이블에서 masked 필드가 있는 데이터를 가져와서 라벨링 처리"""
-        sql = """
-            SELECT l.id, l.masked
-            FROM label l
-            JOIN disclosure_events de ON l.id = de.id
-            WHERE l.masked IS NOT NULL
-              AND l.masked <> ''
-              AND de.disclosed_at AT TIME ZONE 'Asia/Seoul' >= :start_date
-              AND de.disclosed_at AT TIME ZONE 'Asia/Seoul' <= :end_date
-            ORDER BY de.disclosed_at, l.id
+        """여기서 문자열 → datetime은 DB 쿼리 바인딩 직전에만 변환해도 되지만,
+        우리는 그냥 문자열 그대로 바인딩(타임존 변환이 SQL안에서 처리되므로 OK)"""
+
+        s = datetime.fromisoformat(start_date)
+        e = datetime.fromisoformat(end_date)
+        if s.tzinfo is None:
+            s = s.replace(tzinfo=UTC)
+        else:
+            s = s.astimezone(UTC)
+        if e.tzinfo is None:
+            e = e.replace(tzinfo=UTC)
+        else:
+            e = e.astimezone(UTC)
+
+        sql = f"""
+            SELECT id, masked
+            FROM kind
+            WHERE masked IS NOT NULL
+              AND masked <> ''
+              AND disclosed_at BETWEEN :utc_start AND :utc_end
         """
         with ENGINE.connect() as conn:
-            # 문자열(ISO) 그대로 바인딩 → DB 드라이버가 timestamp로 캐스팅
-            result = conn.execute(
-                sa.text(sql), {"start_date": start_date, "end_date": end_date}
-            )
+            result = conn.execute(sa.text(sql), {"utc_start": s, "utc_end": e})
             events = [{"id": row.id, "masked": row.masked} for row in result]
-            print(
-                f"Fetched {len(events)} masked events for labeling period {start_date} to {end_date}"
-            )
-            return events
+
+        print(
+            f"Fetched {len(events)} masked events for UTC period {s.isoformat()} → {e.isoformat()}"
+        )
+        return events
 
     # ④ JSONL 파일 작성 & OpenAI 업로드(월별) - 마스킹용
     @task(task_id="upload_masking_batch_file")
@@ -198,68 +248,97 @@ def label_disclosure_events_by_gpt_batch_dag():
         print(f"Successfully processed {len(ok)} masked texts")
         return ok
 
-    # ⑦ 라벨링된 데이터를 label 테이블에 저장(월별)
+    # ⑦ 라벨링된 데이터를 kind 테이블에 저장(월별) - 벌크 업데이트
     def save_labeled_data(labeled_results: list[dict]) -> None:
+        """
+        벌크 업데이트: 임시테이블에 COPY로 적재 → UPDATE ... FROM 로 한번에 반영
+        - 루프 UPDATE 제거로 왕복/락/플랜 비용 대폭 절감
+        - 라벨 값 검증도 벌크 처리 과정에서 수행
+        """
         if not labeled_results:
             print("No labeled data to save")
             return
 
-        # 원본 summary_kr과 masked 데이터도 함께 가져와서 저장
-        with ENGINE.begin() as conn:
-            for result in labeled_results:
-                # 원본 summary_kr과 masked 가져오기
-                original_sql = """
-                    SELECT summary_kr, masked FROM label WHERE id = :id
-                """
-                original_result = conn.execute(
-                    sa.text(original_sql), {"id": result["id"]}
-                ).fetchone()
+        # 1) 메모리에서 탭 구분값(TSV) 생성 (COPY용)
+        #    라벨 값 검증도 이 과정에서 수행
+        buf = io.StringIO()
+        count = 0
+        invalid_count = 0
 
-                if original_result:
-                    # label 값이 정수인지 확인하고, 정수가 아니면 null로 처리
-                    label_value = result["label"]
-                    try:
-                        # 정수로 변환 시도
-                        if label_value and label_value.strip():
-                            int_label = int(label_value.strip())
-                            # 0, 1, 2 중 하나인지 확인
-                            if int_label not in [0, 1, 2]:
-                                print(
-                                    f"Invalid label value {int_label} for id {result['id']}, setting to null"
-                                )
-                                label_value = None
-                        else:
-                            print(
-                                f"Empty label value for id {result['id']}, setting to null"
-                            )
-                            label_value = None
-                    except (ValueError, TypeError):
+        for result in labeled_results:
+            rid = int(result["id"])
+            label_value = result["label"]
+
+            # 라벨 값 검증 및 변환
+            validated_label = None
+            try:
+                if label_value and label_value.strip():
+                    int_label = int(label_value.strip())
+                    # 1, 0, -1 중 하나인지 확인
+                    if int_label in [1, 0, -1]:
+                        validated_label = int_label
+                    else:
                         print(
-                            f"Non-integer label value '{label_value}' for id {result['id']}, setting to null"
+                            f"Invalid label value {int_label} for id {rid}, setting to null"
                         )
-                        label_value = None
+                        invalid_count += 1
+                else:
+                    print(f"Empty label value for id {rid}, setting to null")
+                    invalid_count += 1
+            except (ValueError, TypeError):
+                print(
+                    f"Non-integer label value '{label_value}' for id {rid}, setting to null"
+                )
+                invalid_count += 1
 
-                    # label 테이블에 데이터 저장 (UPSERT)
-                    upsert_sql = """
-                        INSERT INTO label (id, summary_kr, masked, label)
-                        VALUES (:id, :summary_kr, :masked, :label)
-                        ON CONFLICT (id) 
-                        DO UPDATE SET 
-                            summary_kr = EXCLUDED.summary_kr,
-                            masked = EXCLUDED.masked,
-                            label = EXCLUDED.label
+            # NULL 값은 \N으로 저장 (PostgreSQL COPY에서 NULL 처리)
+            label_str = str(validated_label) if validated_label is not None else "\\N"
+            buf.write(f"{rid}\t{label_str}\n")
+            count += 1
+
+        buf.seek(0)
+
+        # 2) 트랜잭션 내에서: 임시테이블 생성 → COPY → UPDATE ... FROM
+        with ENGINE.begin() as conn:
+            # 임시테이블 (트랜잭션 끝나면 자동 제거)
+            conn.execute(
+                sa.text(
                     """
-                    conn.execute(
-                        sa.text(upsert_sql),
-                        {
-                            "id": result["id"],
-                            "summary_kr": original_result.summary_kr,
-                            "masked": original_result.masked,
-                            "label": label_value,  # 검증된 라벨 값 저장
-                        },
-                    )
+                CREATE TEMP TABLE tmp_labeled (
+                    id BIGINT PRIMARY KEY,
+                    label INTEGER
+                ) ON COMMIT DROP;
+            """
+                )
+            )
 
-        print(f"Saved {len(labeled_results)} labeled records to label table.")
+            # DBAPI 커넥션 꺼내서 고속 COPY 수행
+            # SQLAlchemy 2.x: driver_connection으로 DBAPI 커넥션 접근
+            dbapi_conn = conn.connection.driver_connection
+            with dbapi_conn.cursor() as cur:
+                # 기본 TEXT COPY (탭 구분) 사용
+                cur.copy_from(
+                    file=buf,
+                    table="tmp_labeled",
+                    sep="\t",
+                    columns=("id", "label"),
+                )
+
+            # 3) 한 방 UPDATE (INTEGER 필드 직접 업데이트)
+            conn.execute(
+                sa.text(
+                    """
+                UPDATE kind AS k
+                SET label = t.label
+                FROM tmp_labeled AS t
+                WHERE k.id = t.id;
+            """
+                )
+            )
+
+        print(f"Bulk-updated {count} labeled records in kind table.")
+        if invalid_count > 0:
+            print(f"Found {invalid_count} invalid labels set to NULL.")
 
     # ⑧ 통합 태스크: 배치 처리와 데이터 저장을 함께 수행
     @task(task_id="process_and_save_masking_batch", max_active_tis_per_dag=2)
@@ -280,12 +359,13 @@ def label_disclosure_events_by_gpt_batch_dag():
     )
 
     # ✅ 리스트[dict]를 매핑할 때는 expand_kwargs 사용
+    alter_table_task = alter_kind_table_if_not_exists()
     evts = fetch_masked_events.expand_kwargs(month_ranges)
     file_id = upload_masking_batch_file.expand(events=evts)
     process_and_save_results = process_and_save_masking_batch.expand(file_id=file_id)
 
     # 의존성 설정
-    (month_ranges >> evts >> file_id >> process_and_save_results)
+    (alter_table_task >> month_ranges >> evts >> file_id >> process_and_save_results)
 
 
 # DAG 인스턴스 (기본 기간은 예시, 트리거 시 파라미터로 바꿔도 됨)
