@@ -39,7 +39,7 @@ MASKING_SYSTEM_PROMPT = (
     "같은 회사가 여러 번 언급되면 동일한 마스킹을 사용하세요. "
     "마스킹된 텍스트만 반환하고 다른 설명은 하지 마세요."
 )
-MODEL = "gpt-5-nano"
+MODEL = "gpt-4.1-nano"
 
 
 @dag(
