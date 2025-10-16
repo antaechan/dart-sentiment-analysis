@@ -53,10 +53,9 @@ UTC = ZoneInfo("UTC")
     catchup=False,
     tags=["openai", "masking", "batch"],
     max_active_tasks=1,
-    # DAG 기본 파라미터는 문자열로! (JSON-serializable)
-    params={"start_date": "2022-07-01", "end_date": "2023-06-30"},
+    params={"start_date": "2021-01-01", "end_date": "2021-01-31"},
 )
-def mask_disclosure_events_batch_dag():
+def mask_kind_disclosure_events_dag():
     """일괄 Batch 마스킹 DAG (월 단위 청크 처리)"""
 
     @task(task_id="alter_kind_table")
@@ -211,7 +210,7 @@ def mask_disclosure_events_batch_dag():
         batch = client.batches.create(
             input_file_id=file_id,
             endpoint="/v1/chat/completions",
-            completion_window="3h",
+            completion_window="24h",
         )
         batch_id = batch.id
         print(f"Created batch job: {batch_id}")
@@ -354,4 +353,4 @@ def mask_disclosure_events_batch_dag():
 
 
 # DAG 인스턴스 (기본 기간은 예시, 트리거 시 파라미터로 바꿔도 됨)
-masking_dag = mask_disclosure_events_batch_dag()
+masking_dag = mask_kind_disclosure_events_dag()
