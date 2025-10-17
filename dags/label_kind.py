@@ -49,9 +49,9 @@ UTC = ZoneInfo("UTC")
     tags=["openai", "labeling", "batch"],
     max_active_tasks=1,
     # DAG 기본 파라미터는 문자열로! (JSON-serializable)
-    params={"start_date": "2023-04-01", "end_date": "2023-04-30"},
+    params={"start_date": "2022-01-01", "end_date": "2022-06-30"},
 )
-def label_disclosure_events_by_gpt_batch_dag():
+def label_kind_disclosure_events_by_gpt_batch_dag():
     """일괄 Batch GPT로 라벨링 DAG (월 단위 청크 처리)"""
 
     @task(task_id="alter_kind_table")
@@ -369,4 +369,4 @@ def label_disclosure_events_by_gpt_batch_dag():
 
 
 # DAG 인스턴스 (기본 기간은 예시, 트리거 시 파라미터로 바꿔도 됨)
-labeling_dag = label_disclosure_events_by_gpt_batch_dag()
+labeling_dag = label_kind_disclosure_events_by_gpt_batch_dag()
