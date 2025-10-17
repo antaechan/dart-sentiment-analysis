@@ -183,7 +183,7 @@ def build_price_map_with_ffill(
     tags=["ticks", "event_returns"],
     max_active_tasks=1,
 )
-def event_reaction_returns_dag():
+def event_reaction_returns_kind_dag():
     @task
     def create_table_if_not_exists() -> None:
         """
@@ -198,7 +198,7 @@ def event_reaction_returns_dag():
         CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
             id SERIAL PRIMARY KEY,
             event_id INTEGER NOT NULL UNIQUE,
-            stock_code VARCHAR(10) NOT NULL,
+            stock_code VARCHAR(20) NOT NULL,
             event_ts TIMESTAMP WITH TIME ZONE NOT NULL,
             market VARCHAR(20) NOT NULL,
             {ret_columns_sql},
@@ -218,7 +218,7 @@ def event_reaction_returns_dag():
     def fetch_events_monthly(start_date: datetime, end_date: datetime) -> list[dict]:
         """
         지정된 월 범위의 kind 테이블 중,
-        * 발표 시각이 국내 장중(09:00~15:30, KST) 사이에 발생했고
+        * 발표 시각이 국내 장중(09:00~15:20, KST) 사이에 발생했고
         * OHLCV Parquet 파일이 존재하는 날짜만 반환
         반환 형식: [{'event_id': …, 'ts': datetime, 'code': str, 'market': str}, …]
         """
@@ -226,23 +226,26 @@ def event_reaction_returns_dag():
             sql = """
             SELECT
                 id                    AS event_id,
-                (disclosed_at AT TIME ZONE 'Asia/Seoul') AS ts_kst,
+                disclosed_at,
                 stock_code,
                 market
             FROM kind
             WHERE stock_code IS NOT NULL
+              AND stock_code != ''
               AND disclosed_at IS NOT NULL
+              AND label IS NOT NULL
               AND market IN ('KOSPI', 'KOSDAQ', 'KOSDAQ GLOBAL')
-              -- 09:00~15:30 사이 공시만 (KST 기준)
+              -- 09:00~15:20 사이 공시만 (KST 기준)
               AND (
-                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') BETWEEN 9 AND 14)
+                  (EXTRACT(HOUR FROM disclosed_at) BETWEEN 9 AND 14)
                   OR
-                  (EXTRACT(HOUR FROM disclosed_at AT TIME ZONE 'Asia/Seoul') = 15
-                   AND EXTRACT(MINUTE FROM disclosed_at AT TIME ZONE 'Asia/Seoul') <= 20)
+                  (EXTRACT(HOUR FROM disclosed_at) = 15
+                   AND EXTRACT(MINUTE FROM disclosed_at) <= 20)
               )
               -- 월별 범위 필터링
               AND disclosed_at >= %(start_date)s
               AND disclosed_at <= %(end_date)s
+            ORDER BY disclosed_at
             """
             df = pd.read_sql(
                 sql, conn, params={"start_date": start_date, "end_date": end_date}
@@ -252,11 +255,9 @@ def event_reaction_returns_dag():
             print(f"No events found for {start_date} to {end_date}")
             return []
 
-        df["ts_kst"] = df["ts_kst"].dt.tz_localize("Asia/Seoul")
-
-        # 문자열은 isoformat()으로( +09:00 형태 보장 )
-        df["event_ts"] = df["ts_kst"].apply(lambda x: x.isoformat())
-        df["date_int"] = df["ts_kst"].dt.strftime("%Y%m%d").astype(int)
+        # 문자열은 strftime으로 변환 (timezone 정보 제거)
+        df["event_ts"] = df["disclosed_at"].dt.strftime("%Y-%m-%dT%H:%M:%S")
+        df["date_int"] = df["disclosed_at"].dt.strftime("%Y%m%d").astype(int)
 
         return df[["event_id", "stock_code", "event_ts", "date_int", "market"]].to_dict(
             orient="records"
@@ -416,6 +417,12 @@ def event_reaction_returns_dag():
 
             # 기본 가격 조회
             stock_code = ev["stock_code"]
+
+            # 빈 종목코드 체크
+            if not stock_code or stock_code.strip() == "":
+                print(f"Skipping event with empty stock_code: {ev}")
+                continue
+
             p0 = price_map.get((stock_code, ts0))
             market_p0 = market_price_map.get(ts0)
 
@@ -464,12 +471,12 @@ def event_reaction_returns_dag():
     # ───────────────────────── DAG 의 Task 의존성 ───────────────────
     create_table_task = create_table_if_not_exists()
     events_task = fetch_events(
-        start_date=datetime(2023, 1, 1),
-        end_date=datetime(2023, 12, 31),
+        start_date=datetime(2022, 6, 30),
+        end_date=datetime(2022, 7, 1),
     )
     returns_task = compute_returns_monthly.expand(events=events_task)
 
     create_table_task >> returns_task
 
 
-dag = event_reaction_returns_dag()
+dag = event_reaction_returns_kind_dag()
