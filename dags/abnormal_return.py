@@ -18,6 +18,12 @@ from config import KOSDAQ_OUT_DIR, KOSPI_OUT_DIR, TZ
 # 테이블 및 컬럼 설정
 TABLE_NAME = "abnormal_return"
 ABN_RET_COLUMNS = {
+    -60: "abn_ret_minus_60m",
+    -50: "abn_ret_minus_50m",
+    -40: "abn_ret_minus_40m",
+    -30: "abn_ret_minus_30m",
+    -20: "abn_ret_minus_20m",
+    -10: "abn_ret_minus_10m",
     10: "abn_ret_10m",
     20: "abn_ret_20m",
     30: "abn_ret_30m",
@@ -119,14 +125,22 @@ def build_market_price_map_with_ffill(
     return price_map
 
 
-def build_price_map_with_ffill(ohlcv: pl.DataFrame, date_int: int) -> dict:
+def build_price_map_with_ffill(
+    ohlcv: pl.DataFrame, date_int: int, required_codes: set[str] = None
+) -> dict:
     """
-    해당 날짜(09:00~15:30, 1분 간격)의 모든 분 타임스탬프를 만들고,
-    종목별로 close를 forward fill하여 (code, ts) -> close 맵을 만든다.
+    필요한 종목만 처리하여 메모리 사용량을 크게 줄인 price_map 생성
     """
     tz = zoneinfo.ZoneInfo(TZ)
 
-    # 1) 날짜 범위 (09:00 ~ 15:30, inclusive) 분단위 인덱스 생성
+    # 1) 필요한 종목만 필터링 (메모리 절약)
+    if required_codes:
+        ohlcv = ohlcv.filter(pl.col("code").is_in(list(required_codes)))
+
+    if ohlcv.is_empty():
+        return {}
+
+    # 2) 날짜 범위 (09:00 ~ 15:30, inclusive) 분단위 인덱스 생성
     d = datetime.strptime(str(date_int), "%Y%m%d")
     start = d.replace(hour=9, minute=0, second=0, microsecond=0, tzinfo=tz)
     end = d.replace(hour=15, minute=20, second=0, microsecond=0, tzinfo=tz)
@@ -136,25 +150,29 @@ def build_price_map_with_ffill(ohlcv: pl.DataFrame, date_int: int) -> dict:
     )
     idx_df = pl.DataFrame({"ts": ts_idx})
 
-    # 2) ts를 TZ-aware로 맞추기 (parquet이 naive면 timezone 부여)
+    # 3) ts를 TZ-aware로 맞추기 (parquet이 naive면 timezone 부여)
     ohlcv = ohlcv.with_columns(pl.col("ts").dt.replace_time_zone(TZ))
 
-    # 3) 종목코드 × 모든 분단위 ts 생성(크로스 조인) 후 원본과 left join
-    codes = ohlcv.select("code").unique()
-    full_grid = codes.join(idx_df, how="cross")
+    # 4) 종목별로 청크 단위 처리 (메모리 효율성)
+    price_map = {}
+    unique_codes = ohlcv.select("code").unique().to_series()
 
-    df = (
-        full_grid.join(ohlcv, on=["code", "ts"], how="left")
-        .sort(["code", "ts"])
-        .with_columns(pl.col("close").forward_fill().alias("close"))
-    )
+    for code in unique_codes:
+        # 종목별로 작은 단위로 처리
+        code_data = ohlcv.filter(pl.col("code") == code)
+        code_grid = pl.DataFrame({"code": [code] * len(ts_idx), "ts": ts_idx})
 
-    # 4) dict로 변환 (None 걸러내기)
-    price_map = {
-        (row["code"], row["ts"]): row["close"]
-        for row in df.iter_rows(named=True)
-        if row["close"] is not None
-    }
+        df = (
+            code_grid.join(code_data, on=["code", "ts"], how="left")
+            .sort("ts")
+            .with_columns(pl.col("close").forward_fill().alias("close"))
+        )
+
+        # 딕셔너리에 추가
+        for row in df.iter_rows(named=True):
+            if row["close"] is not None:
+                price_map[(row["code"], row["ts"])] = row["close"]
+
     return price_map
 
 
@@ -180,7 +198,7 @@ def event_reaction_returns_dag():
         CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
             id SERIAL PRIMARY KEY,
             event_id INTEGER NOT NULL UNIQUE,
-            stock_code VARCHAR(10) NOT NULL,
+            stock_code VARCHAR(20) NOT NULL,
             event_ts TIMESTAMP WITH TIME ZONE NOT NULL,
             market VARCHAR(20) NOT NULL,
             {ret_columns_sql},
@@ -303,7 +321,11 @@ def event_reaction_returns_dag():
                         kospi_pq_path, columns=["ts", "종목코드", "close"]
                     ).rename({"종목코드": "code"})
 
-                    price_map = build_price_map_with_ffill(ohlcv, date_int)
+                    # 필요한 종목 코드만 추출하여 메모리 효율성 향상
+                    required_codes = set(ev["stock_code"] for ev in kospi_events)
+                    price_map = build_price_map_with_ffill(
+                        ohlcv, date_int, required_codes
+                    )
                     market_price_map = build_market_price_map_with_ffill(
                         ohlcv, date_int, "KR7069500007"
                     )
@@ -331,7 +353,11 @@ def event_reaction_returns_dag():
                         kospi_pq_path, columns=["ts", "종목코드", "close"]
                     ).rename({"종목코드": "code"})
 
-                    price_map = build_price_map_with_ffill(kosdaq_ohlcv, date_int)
+                    # 필요한 종목 코드만 추출하여 메모리 효율성 향상
+                    required_codes = set(ev["stock_code"] for ev in kosdaq_events)
+                    price_map = build_price_map_with_ffill(
+                        kosdaq_ohlcv, date_int, required_codes
+                    )
                     market_price_map = build_market_price_map_with_ffill(
                         kospi_ohlcv, date_int, "KR7229200001"
                     )
@@ -377,8 +403,9 @@ def event_reaction_returns_dag():
     def calculate_abnormal_returns_for_events(
         events: list[dict], price_map: dict, market_price_map: dict
     ) -> list[dict]:
-        """이벤트 리스트에 대해 abnormal return을 계산하는 헬퍼 함수"""
+        """이벤트 리스트에 대해 abnormal return을 계산하는 헬퍼 함수 (딕셔너리 조회 최적화)"""
         updates = []
+        lag_minutes = list(ABN_RET_COLUMNS.keys())
 
         for ev in events:
             ts0 = to_min(
@@ -386,7 +413,16 @@ def event_reaction_returns_dag():
                     tzinfo=zoneinfo.ZoneInfo(TZ)
                 )
             )
-            p0 = price_map.get((ev["stock_code"], ts0))
+
+            # 기본 가격 조회
+            stock_code = ev["stock_code"]
+
+            # 빈 종목코드 체크
+            if not stock_code or stock_code.strip() == "":
+                print(f"Skipping event with empty stock_code: {ev}")
+                continue
+
+            p0 = price_map.get((stock_code, ts0))
             market_p0 = market_price_map.get(ts0)
 
             print(f"ev: {ev}, ts0: {ts0}, p0: {p0}, market_p0: {market_p0}")
@@ -394,16 +430,24 @@ def event_reaction_returns_dag():
             if p0 is None or p0 == 0 or market_p0 is None or market_p0 == 0:
                 continue
 
+            # 한 번에 모든 필요한 시간대 계산
+            all_timestamps = [ts0 + timedelta(minutes=lag) for lag in lag_minutes]
+
+            # 한 번에 모든 lag 가격 조회 (딕셔너리 조회 최적화)
+            p_lags = [price_map.get((stock_code, ts)) for ts in all_timestamps]
+            market_p_lags = [market_price_map.get(ts) for ts in all_timestamps]
+
             rec = {
                 "event_id": ev["event_id"],
-                "stock_code": ev["stock_code"],
+                "stock_code": stock_code,
                 "event_ts": ev["event_ts"],
                 "market": ev["market"],
             }
 
-            for lag in ABN_RET_COLUMNS.keys():
-                p_lag = price_map.get((ev["stock_code"], ts0 + timedelta(minutes=lag)))
-                market_p_lag = market_price_map.get(ts0 + timedelta(minutes=lag))
+            # 벡터화된 수익률 계산
+            for i, lag in enumerate(lag_minutes):
+                p_lag = p_lags[i]
+                market_p_lag = market_p_lags[i]
 
                 if p_lag and market_p_lag:
                     # 개별 수익률 계산
@@ -426,7 +470,7 @@ def event_reaction_returns_dag():
     # ───────────────────────── DAG 의 Task 의존성 ───────────────────
     create_table_task = create_table_if_not_exists()
     events_task = fetch_events(
-        start_date=datetime(2023, 1, 1),
+        start_date=datetime(2022, 9, 1),
         end_date=datetime(2023, 12, 31),
     )
     returns_task = compute_returns_monthly.expand(events=events_task)
