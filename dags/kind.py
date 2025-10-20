@@ -15,7 +15,7 @@ Airflow DAG (TaskFlow API): Chrome(Selenium)으로 KIND 상세검색 페이지�
 환경 변수(옵션)
   KIND_TARGET_URL : 기본값 'https://kind.krx.co.kr/disclosure/details.do?method=searchDetailsMain#viewer'
   HEADLESS        : 'true'/'false' (기본 true)
-  MAX_PAGES       : 최대 페이지 크롤 수 (기본 5)
+  BATCH_SIZE      : 페이지 배치 크기 (기본 5)
 
 ARM64 (Apple Silicon/M1) 호환성 주의사항:
 - Docker 환경에서 실행 시 ARM64 호환 이미지 사용 필요
@@ -69,7 +69,10 @@ DEFAULT_URL = os.environ.get(
     "https://kind.krx.co.kr/disclosure/details.do?method=searchDetailsMain#viewer",
 )
 HEADLESS = os.environ.get("HEADLESS", "true").lower() != "false"
-MAX_PAGES = int(os.environ.get("MAX_PAGES", "1000"))
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "10"))  # 페이지 단위로 배치 처리
+
+# 전역 회사명 캐시 (성능 최적화)
+COMPANY_CACHE = {}
 
 # Timeout configurations
 PAGE_LOAD_TIMEOUT = int(os.environ.get("PAGE_LOAD_TIMEOUT", "60"))
@@ -345,8 +348,8 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
     rows = driver.find_elements(By.CSS_SELECTOR, rows_sel)
     n = len(rows)
 
-    # 회사명 캐시를 위한 딕셔너리
-    company_cache = {}
+    # 전역 회사명 캐시 사용
+    global COMPANY_CACHE
 
     for i in range(n):  # 0..n-1
         for attempt in range(3):  # stale이면 최대 3회 재시도
@@ -405,17 +408,17 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
 
                 detail_url = f"https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno={disclosure_id}&docno=&viewerhost=&viewerport="
 
-                # 회사명 캐시 확인 및 사용
-                if company_name_txt not in company_cache:
+                # 전역 회사명 캐시 확인 및 사용
+                if company_name_txt not in COMPANY_CACHE:
                     stock_code, short_code = get_stock_code_by_company_name(
                         company_name_txt
                     )
-                    company_cache[company_name_txt] = (
+                    COMPANY_CACHE[company_name_txt] = (
                         stock_code or "",
                         short_code or "",
                     )
 
-                cached_stock_code, cached_short_code = company_cache[company_name_txt]
+                cached_stock_code, cached_short_code = COMPANY_CACHE[company_name_txt]
 
                 out.append(
                     {
@@ -426,6 +429,12 @@ def _extract_rows(driver: webdriver.Chrome) -> List[dict]:
                         "market": market,
                         "title": title_txt,
                         "disclosure_id": disclosure_id,
+                        "summary_kr": "",
+                        "raw": "",
+                        "masked": "",
+                        "disclosure_type": "",
+                        "dart_unique_id": "",
+                        "label": None,
                         "detail_url": detail_url,
                         "is_modify": is_modify,
                     }
@@ -465,18 +474,16 @@ def _click_next_page(driver: webdriver.Chrome) -> bool:
 
 def _crawl_kind_to_database(
     target_url: Optional[str] = None,
-    max_pages: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> str:
 
     url = target_url or DEFAULT_URL
-    pages = max_pages or MAX_PAGES
 
     logging.info(f"=== Starting KIND crawling process ===")
     logging.info(f"Target URL: {url}")
-    logging.info(f"Max pages: {pages}")
     logging.info(f"Date range: {start_date} ~ {end_date}")
+    logging.info(f"Batch size: {BATCH_SIZE} pages")
 
     # 데이터베이스 연결 및 테이블 확인
     engine = create_database_engine()
@@ -488,6 +495,8 @@ def _crawl_kind_to_database(
 
     page_count = 0
     total_rows = 0
+    batch_rows = []  # 배치 처리를 위한 임시 저장소
+
     try:
         logging.info(f"Opening URL: {url}")
         driver.get(url)
@@ -520,35 +529,41 @@ def _crawl_kind_to_database(
             logging.info("Results table loaded for current page")
 
             rows = _extract_rows(driver)
-
-            # kind 테이블에 rows 업데이트
-            if rows:
-                try:
-                    _insert_rows_to_kind_table(engine, rows)
-                    logging.info(
-                        f"Successfully inserted {len(rows)} rows to kind table"
-                    )
-                    total_rows += len(rows)
-                except Exception as e:
-                    logging.error(f"Failed to insert rows to kind table: {str(e)}")
-
-            logging.info(f"Extracted {len(rows)} rows from page {page_count + 1}")
+            batch_rows.extend(rows)
             page_count += 1
 
-            logging.info(
-                f"Page {page_count}: Extracted {len(rows)} rows (Total: {total_rows} rows)"
-            )
+            logging.info(f"Extracted {len(rows)} rows from page {page_count}")
+            logging.info(f"Batch accumulated: {len(batch_rows)} rows")
 
-            if page_count >= pages:
-                logging.info(f"Reached max pages limit ({pages}), stopping pagination")
-                break
+            # 배치 크기에 도달했거나 마지막 페이지인 경우 데이터베이스에 저장
+            if page_count % BATCH_SIZE == 0 or not _click_next_page(driver):
+                if batch_rows:
+                    try:
+                        _insert_rows_to_kind_table(engine, batch_rows)
+                        logging.info(
+                            f"Successfully bulk inserted {len(batch_rows)} rows to kind table"
+                        )
+                        total_rows += len(batch_rows)
+                        batch_rows = []  # 배치 초기화
+                    except Exception as e:
+                        logging.error(f"Failed to insert batch to kind table: {str(e)}")
 
-            logging.info("Attempting to go to next page...")
-            if not _click_next_page(driver):
-                logging.info("No more pages available, stopping pagination")
-                break
-            else:
-                logging.info("Successfully moved to next page")
+                if not _click_next_page(driver):
+                    logging.info("No more pages available, stopping pagination")
+                    break
+                else:
+                    logging.info("Successfully moved to next page")
+
+        # 남은 배치 데이터 처리
+        if batch_rows:
+            try:
+                _insert_rows_to_kind_table(engine, batch_rows)
+
+                total_rows += len(batch_rows)
+            except Exception as e:
+                logging.error(
+                    f"Failed to insert remaining batch to kind table: {str(e)}"
+                )
 
         logging.info(f"=== Crawling completed ===")
         logging.info(f"Total pages processed: {page_count}")
@@ -591,11 +606,11 @@ def kind_disclosure_crawl_dag():
             logging.info("Starting KIND disclosure crawling...")
             logging.info(f"Target URL: {DEFAULT_URL}")
             logging.info(f"Headless mode: {HEADLESS}")
-            logging.info(f"Max pages: {MAX_PAGES}")
+            logging.info(f"Batch size: {BATCH_SIZE} pages")
 
             result = _crawl_kind_to_database(
-                start_date="2021-01-01",
-                end_date="2021-06-30",
+                start_date="2022-07-01",
+                end_date="2022-12-31",
             )
             logging.info(f"Crawling completed: {result}")
             print(f"Crawling completed: {result}")

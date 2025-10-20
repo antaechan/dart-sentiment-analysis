@@ -128,6 +128,10 @@ def create_kind_table_if_not_exists(engine: sa.engine.Engine) -> bool:
             title TEXT,
             summary_kr   TEXT,
             raw          TEXT,
+            masked       TEXT,
+            disclosure_type VARCHAR(50),
+            dart_unique_id VARCHAR(50),
+            label        VARCHAR(50),
             detail_url TEXT,
             is_modify INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -172,15 +176,18 @@ def create_kind_table_if_not_exists(engine: sa.engine.Engine) -> bool:
 
 def _insert_rows_to_kind_table(engine, rows: List[dict]) -> None:
     """
-    추출된 rows를 kind 테이블에 삽입합니다.
+    추출된 rows를 kind 테이블에 bulk insert합니다.
 
     Args:
         engine: SQLAlchemy 엔진
         rows: 삽입할 데이터 리스트
     """
-    try:
+    if not rows:
+        return
 
-        # 각 row를 데이터베이스에 삽입
+    try:
+        # 데이터 준비
+        processed_rows = []
         for row in rows:
             # disclosure_id가 비어있으면 건너뛰기
             disclosure_id = row.get("disclosure_id", "")
@@ -188,32 +195,6 @@ def _insert_rows_to_kind_table(engine, rows: List[dict]) -> None:
                 logging.warning(f"disclosure_id가 비어있는 row를 건너뜁니다: {row}")
                 continue
 
-            # CSV에 없는 필드는 빈 문자열로 설정
-            insert_sql = text(
-                """
-                INSERT INTO kind (
-                    disclosure_id, disclosed_at, company_name, stock_code, short_code,
-                    market, title, summary_kr, raw, detail_url, is_modify
-                ) VALUES (
-                    :disclosure_id, :disclosed_at, :company_name, :stock_code, :short_code,
-                    :market, :title, :summary_kr, :raw, :detail_url, :is_modify
-                )
-                ON CONFLICT (disclosure_id) DO UPDATE SET
-                    disclosed_at = EXCLUDED.disclosed_at,
-                    company_name = EXCLUDED.company_name,
-                    stock_code = EXCLUDED.stock_code,
-                    short_code = EXCLUDED.short_code,
-                    market = EXCLUDED.market,
-                    title = EXCLUDED.title,
-                    summary_kr = EXCLUDED.summary_kr,
-                    raw = EXCLUDED.raw,
-                    detail_url = EXCLUDED.detail_url,
-                    is_modify = EXCLUDED.is_modify,
-                    updated_at = CURRENT_TIMESTAMP
-"""
-            )
-
-            # 데이터 준비 (없는 필드는 빈 문자열로)
             # disclosed_at를 TIMESTAMP 형식으로 변환
             disclosed_at = row.get("disclosed_at", "")
             if disclosed_at:
@@ -225,26 +206,73 @@ def _insert_rows_to_kind_table(engine, rows: List[dict]) -> None:
                     # 파싱 실패 시 원본 값 유지
                     pass
 
-            data = {
-                "disclosure_id": disclosure_id,
-                "disclosed_at": disclosed_at,
-                "company_name": row.get("company_name", ""),
-                "stock_code": row.get("stock_code", ""),
-                "short_code": row.get("short_code", ""),
-                "market": row.get("market", ""),
-                "title": row.get("title", ""),
-                "summary_kr": "",  # CSV에 없는 필드
-                "raw": "",  # CSV에 없는 필드
-                "detail_url": row.get("detail_url", ""),
-                "is_modify": row.get("is_modify", 0),  # 정정 공시 여부 (기본값: 0)
-            }
+            processed_rows.append(
+                {
+                    "disclosure_id": disclosure_id,
+                    "disclosed_at": disclosed_at,
+                    "company_name": row.get("company_name", ""),
+                    "stock_code": row.get("stock_code", ""),
+                    "short_code": row.get("short_code", ""),
+                    "market": row.get("market", ""),
+                    "title": row.get("title", ""),
+                    "summary_kr": "",  # CSV에 없는 필드
+                    "raw": "",  # CSV에 없는 필드
+                    "masked": "",  # 새로 추가된 필드
+                    "disclosure_type": "",  # 새로 추가된 필드
+                    "dart_unique_id": "",  # 새로 추가된 필드
+                    "label": None,  # 새로 추가된 필드 (null)
+                    "detail_url": row.get("detail_url", ""),
+                    "is_modify": row.get("is_modify", 0),  # 정정 공시 여부 (기본값: 0)
+                }
+            )
 
-            with engine.connect() as conn:
-                conn.execute(insert_sql, data)
-                conn.commit()
+        if not processed_rows:
+            logging.warning("처리할 유효한 데이터가 없습니다.")
+            return
+
+        # DataFrame으로 변환하여 bulk insert
+        df = pd.DataFrame(processed_rows)
+
+        # PostgreSQL의 ON CONFLICT를 사용한 bulk upsert
+        insert_sql = text(
+            """
+            INSERT INTO kind (
+                disclosure_id, disclosed_at, company_name, stock_code, short_code,
+                market, title, summary_kr, raw, masked, disclosure_type, dart_unique_id, label, detail_url, is_modify
+            ) VALUES (
+                :disclosure_id, :disclosed_at, :company_name, :stock_code, :short_code,
+                :market, :title, :summary_kr, :raw, :masked, :disclosure_type, :dart_unique_id, :label, :detail_url, :is_modify
+            )
+            ON CONFLICT (disclosure_id) DO UPDATE SET
+                disclosed_at = EXCLUDED.disclosed_at,
+                company_name = EXCLUDED.company_name,
+                stock_code = EXCLUDED.stock_code,
+                short_code = EXCLUDED.short_code,
+                market = EXCLUDED.market,
+                title = EXCLUDED.title,
+                summary_kr = EXCLUDED.summary_kr,
+                raw = EXCLUDED.raw,
+                masked = EXCLUDED.masked,
+                disclosure_type = EXCLUDED.disclosure_type,
+                dart_unique_id = EXCLUDED.dart_unique_id,
+                label = EXCLUDED.label,
+                detail_url = EXCLUDED.detail_url,
+                is_modify = EXCLUDED.is_modify,
+                updated_at = CURRENT_TIMESTAMP
+        """
+        )
+
+        with engine.connect() as conn:
+            # bulk insert 실행
+            conn.execute(insert_sql, processed_rows)
+            conn.commit()
+
+        logging.info(
+            f"Successfully bulk inserted {len(processed_rows)} rows to kind table"
+        )
 
     except Exception as e:
-        logging.error(f"데이터베이스 삽입 중 오류 발생: {str(e)}")
+        logging.error(f"데이터베이스 bulk insert 중 오류 발생: {str(e)}")
         raise
 
 
