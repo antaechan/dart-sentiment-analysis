@@ -609,8 +609,8 @@ def kind_disclosure_crawl_dag():
             logging.info(f"Batch size: {BATCH_SIZE} pages")
 
             result = _crawl_kind_to_database(
-                start_date="2022-07-01",
-                end_date="2022-12-31",
+                start_date="2023-07-01",
+                end_date="2023-12-31",
             )
             logging.info(f"Crawling completed: {result}")
             print(f"Crawling completed: {result}")

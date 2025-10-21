@@ -17,7 +17,16 @@ import xml.etree.ElementTree as ET
 
 load_dotenv()
 
-KRX_LISTING = fdr.StockListing("KRX")[["Code", "ISU_CD", "Name", "Market"]]
+# KRX_LISTING을 지연 로딩으로 변경하여 DAG import 시간 단축
+_KRX_LISTING = None
+
+
+def get_krx_listing():
+    """KRX 리스팅 데이터를 지연 로딩합니다."""
+    global _KRX_LISTING
+    if _KRX_LISTING is None:
+        _KRX_LISTING = fdr.StockListing("KRX")[["Code", "ISU_CD", "Name", "Market"]]
+    return _KRX_LISTING
 
 
 def get_database_url(host: str = "postgres_events") -> str:
@@ -281,8 +290,9 @@ def get_stock_code_by_company_name(company_name: str):
     company_name을 받으면 stock_code를 반환합니다.
     """
     try:
-        short_code = KRX_LISTING[KRX_LISTING["Name"] == company_name]["Code"].values[0]
-        stock_code = KRX_LISTING[KRX_LISTING["Name"] == company_name]["ISU_CD"].values[
+        krx_listing = get_krx_listing()
+        short_code = krx_listing[krx_listing["Name"] == company_name]["Code"].values[0]
+        stock_code = krx_listing[krx_listing["Name"] == company_name]["ISU_CD"].values[
             0
         ]
     except Exception as e:
