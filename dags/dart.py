@@ -342,6 +342,7 @@ def get_disclosure(
         DartAPIError: API 호출 실패 또는 데이터 없음
     """
     data = send_dart_api(disclosure_type, corp_code=corp_code, bgn_de=date, end_de=date)
+
     return render_disclosure_from_schema(disclosure_type, data)
 
 
