@@ -18,6 +18,8 @@ from sqlalchemy import text
 from airflow.decorators import dag, task
 from database import create_database_engine
 from dart import get_disclosure, dart_API_map
+from crawl import crawling_function_map
+from disclosure_common import extract_text
 
 # 환경 변수
 KST = ZoneInfo("Asia/Seoul")
@@ -115,15 +117,30 @@ def update_kind_raw_fields_dag():
         else:
             e = e.astimezone(UTC)
 
+        # 미리 가능한 disclosure_type 리스트 생성 (둘 중 하나라도 None이 아닌 경우)
+        valid_disclosure_types = [
+            dt
+            for dt in dart_API_map.keys()
+            if dart_API_map.get(dt) is not None
+            or crawling_function_map.get(dt) is not None
+        ]
+
+        if not valid_disclosure_types:
+            print("No valid disclosure types found")
+            return []
+
+        # SQL IN 절에 사용할 플레이스홀더 생성
+        placeholders = ",".join([f"'{dt}'" for dt in valid_disclosure_types])
+
         sql = f"""
-            SELECT k.id, k.disclosure_type, k.disclosed_at, d.dart_disclosure_id, k.short_code
+            SELECT k.id, k.disclosure_type, k.disclosed_at, k.detail_url, d.dart_disclosure_id, k.short_code
             FROM {DISCLOSURE_EVENTS_TABLE} k
             JOIN dart_unique_number d ON k.short_code = d.stock_code
             WHERE (k.raw IS NULL OR k.raw = '')
               AND k.disclosed_at BETWEEN :utc_start AND :utc_end
               AND k.is_modify = 0
-              AND d.dart_disclosure_id IS NOT NULL
-              AND d.dart_disclosure_id != ''
+              AND (d.dart_disclosure_id IS NOT NULL AND d.dart_disclosure_id != '')
+              AND k.disclosure_type IN ({placeholders})
             ORDER BY k.disclosed_at DESC;
         """
 
@@ -141,6 +158,7 @@ def update_kind_raw_fields_dag():
                     "id": row.id,
                     "disclosure_type": row.disclosure_type,
                     "disclosed_at": row.disclosed_at,
+                    "detail_url": row.detail_url,
                     "dart_disclosure_id": row.dart_disclosure_id,
                 }
                 for row in result
@@ -167,20 +185,32 @@ def update_kind_raw_fields_dag():
             record_id = event["id"]
             disclosure_type = event["disclosure_type"]
             disclosed_at = event["disclosed_at"]
+            detail_url = event["detail_url"]
             dart_disclosure_id = event["dart_disclosure_id"]
             date = disclosed_at.strftime("%Y%m%d")
 
-            # DART API가 None인 경우 건너뛰기
-            if dart_API_map.get(disclosure_type) is None:
-                skipped_no_api += 1
-                logging.warning(f"'{disclosure_type}' DART API가 없습니다. 건너뜁니다.")
-                continue
-
             try:
-                logging.info(
-                    f"처리 중: {disclosure_type} - {dart_disclosure_id} ({date})"
-                )
-                raw_content = get_disclosure(disclosure_type, dart_disclosure_id, date)
+                # DART API가 있는 경우
+                if dart_API_map.get(disclosure_type) is not None and dart_disclosure_id:
+                    logging.info(
+                        f"처리 중 (DART API): {disclosure_type} - {dart_disclosure_id} ({date})"
+                    )
+                    raw_content = get_disclosure(
+                        disclosure_type, dart_disclosure_id, date
+                    )
+                # DART API가 없는 경우 extract_text 사용
+                elif (
+                    detail_url
+                    and crawling_function_map.get(disclosure_type) is not None
+                ):
+                    logging.info(f"처리 중 (크롤링): {disclosure_type} - {detail_url}")
+                    raw_content = extract_text(detail_url, disclosure_type)
+                else:
+                    skipped_no_api += 1
+                    logging.warning(
+                        f"'{disclosure_type}' 처리 방법이 없습니다. 건너뜁니다."
+                    )
+                    continue
 
                 if raw_content and len(raw_content.strip()) > 0:
                     # raw 필드 업데이트
