@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from airflow.decorators import dag, task
 from database import create_database_engine
-from dart import get_disclosure, dart_API_map
+from dart import get_disclosure, dart_API_map, DartAPIError
 from crawl import crawling_function_map
 from disclosure_common import extract_text
 
@@ -190,14 +190,33 @@ def update_kind_raw_fields_dag():
             date = disclosed_at.strftime("%Y%m%d")
 
             try:
-                # DART API가 있는 경우
+                raw_content = None
+
+                # DART API가 있는 경우 시도
                 if dart_API_map.get(disclosure_type) is not None and dart_disclosure_id:
-                    logging.info(
-                        f"처리 중 (DART API): {disclosure_type} - {dart_disclosure_id} ({date})"
-                    )
-                    raw_content = get_disclosure(
-                        disclosure_type, dart_disclosure_id, date
-                    )
+                    try:
+                        logging.info(
+                            f"처리 중 (DART API): {disclosure_type} - {dart_disclosure_id} ({date})"
+                        )
+                        raw_content = get_disclosure(
+                            disclosure_type, dart_disclosure_id, date
+                        )
+                    except DartAPIError as dart_error:
+                        # DART API 실패 시 extract_text로 fallback 시도
+                        if (
+                            detail_url
+                            and crawling_function_map.get(disclosure_type) is not None
+                        ):
+                            logging.warning(
+                                f"DART API 실패, 크롤링으로 fallback: {disclosure_type} - {str(dart_error)}"
+                            )
+                            logging.info(
+                                f"처리 중 (크롤링): {disclosure_type} - {detail_url}"
+                            )
+                            raw_content = extract_text(detail_url, disclosure_type)
+                        else:
+                            # Fallback도 없으면 re-raise
+                            raise dart_error
                 # DART API가 없는 경우 extract_text 사용
                 elif (
                     detail_url
