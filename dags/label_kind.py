@@ -49,7 +49,7 @@ UTC = ZoneInfo("UTC")
     tags=["openai", "labeling", "batch"],
     max_active_tasks=1,
     # DAG 기본 파라미터는 문자열로! (JSON-serializable)
-    params={"start_date": "2022-01-01", "end_date": "2022-06-30"},
+    params={"start_date": "2023-07-01", "end_date": "2023-12-31"},
 )
 def label_kind_disclosure_events_by_gpt_batch_dag():
     """일괄 Batch GPT로 라벨링 DAG (월 단위 청크 처리)"""

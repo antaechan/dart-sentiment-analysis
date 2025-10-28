@@ -57,7 +57,7 @@ UTC = ZoneInfo("UTC")
     tags=["openai", "summarize", "batch"],
     max_active_tasks=1,
     # DAG 기본 파라미터는 문자열로! (JSON-serializable)
-    params={"start_date": "2022-05-01", "end_date": "2022-06-30"},
+    params={"start_date": "2023-11-01", "end_date": "2023-12-31"},
 )
 def summarize_disclosure_events_batch_dag():
     """일괄 Batch 요약 DAG (월 단위 청크 처리)"""
@@ -138,6 +138,7 @@ def summarize_disclosure_events_batch_dag():
             FROM {DISCLOSURE_EVENTS_TABLE}
             WHERE raw IS NOT NULL
             AND raw <> ''
+            AND market in ('KOSPI', 'KOSDAQ', 'KOSDAQ GLOBAL')
             AND disclosed_at BETWEEN :utc_start AND :utc_end
         """
         with ENGINE.connect() as conn:

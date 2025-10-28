@@ -471,8 +471,8 @@ def event_reaction_returns_kind_dag():
     # ───────────────────────── DAG 의 Task 의존성 ───────────────────
     create_table_task = create_table_if_not_exists()
     events_task = fetch_events(
-        start_date=datetime(2022, 6, 30),
-        end_date=datetime(2022, 7, 1),
+        start_date=datetime(2023, 1, 1),
+        end_date=datetime(2023, 12, 31),
     )
     returns_task = compute_returns_monthly.expand(events=events_task)
 

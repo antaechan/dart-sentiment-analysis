@@ -42,8 +42,8 @@ DISCLOSURE_EVENTS_TABLE = "kind"
     ],
     max_active_tasks=1,
     params={
-        "start_date": "2023-12-01",
-        "end_date": "2023-12-31",
+        "start_date": "2022-07-01",
+        "end_date": "2022-12-31",
     },
 )
 def update_kind_raw_fields_dag():

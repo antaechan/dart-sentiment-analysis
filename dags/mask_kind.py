@@ -53,7 +53,7 @@ UTC = ZoneInfo("UTC")
     catchup=False,
     tags=["openai", "masking", "batch"],
     max_active_tasks=1,
-    params={"start_date": "2021-07-01", "end_date": "2021-12-30"},
+    params={"start_date": "2023-07-01", "end_date": "2023-12-31"},
 )
 def mask_kind_disclosure_events_dag():
     """일괄 Batch 마스킹 DAG (월 단위 청크 처리)"""
