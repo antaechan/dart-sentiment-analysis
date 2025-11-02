@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+from scipy.stats import norm
 
 
 def _safe_std_1d(a):
@@ -13,31 +14,56 @@ def _safe_std_1d(a):
     return float(np.nanstd(a, ddof=1))
 
 
-def _eventwise_se_delta(df_subset, t):
+def _eventwise_se_delta(df_subset, event_window):
     """
     이벤트별 ΔCAR의 SE (근사):
-      - pre:  abn_ret_minus_1m ... abn_ret_minus_tm
-      - post: abn_ret_1m ... abn_ret_tm
-    SE_pre  ~= SD(pre_window)  * sqrt(t)
-    SE_post ~= SD(post_window) * sqrt(t)
-    SE_delta_i = sqrt(SE_pre^2 + SE_post^2)
+      - pre:  abn_ret_minus_{event_window}m 단일 컬럼 사용
+      - post: abn_ret_{event_window}m 단일 컬럼 사용
+      - 전체 표본의 표준편차를 기반으로 모든 이벤트에 동일한 SE 적용
+    SE_pre  ~= SD_global(pre_window)
+    SE_post ~= SD_global(post_window)
+    SE_delta_i = sqrt(SE_pre^2 + SE_post^2) (모든 이벤트 동일)
+
+    Parameters:
+    -----------
+    df_subset : DataFrame
+        이벤트 데이터프레임
+    event_window : int
+        이벤트 창 크기 (분 단위)
+
+    Returns:
+    --------
+    se_delta : ndarray
+        각 이벤트별 SE (모든 이벤트에 동일한 값)
+    delta : ndarray
+        각 이벤트별 ΔCAR 값
     """
-    pre_cols = [f"abn_ret_minus_{k}m" for k in range(1, t + 1)]
-    post_cols = [f"abn_ret_{k}m" for k in range(1, t + 1)]
+    pre_col = f"abn_ret_minus_{event_window}m"
+    post_col = f"abn_ret_{event_window}m"
 
-    pre_mat = df_subset[pre_cols].to_numpy(dtype=float)
-    post_mat = df_subset[post_cols].to_numpy(dtype=float)
+    if pre_col not in df_subset.columns or post_col not in df_subset.columns:
+        raise KeyError(
+            f"Required columns '{pre_col}' or '{post_col}' not found in dataframe. "
+            f"Available columns: {list(df_subset.columns)}"
+        )
 
-    # 이벤트별 표준편차
-    sd_pre = np.apply_along_axis(_safe_std_1d, 1, pre_mat)
-    sd_post = np.apply_along_axis(_safe_std_1d, 1, post_mat)
+    # 전체 표본의 표준편차 계산
+    pre_vals = df_subset[pre_col].dropna()
+    post_vals = df_subset[post_col].dropna()
 
-    se_pre = sd_pre * np.sqrt(t)
-    se_post = sd_post * np.sqrt(t)
+    sd_pre_global = pre_vals.std(ddof=1) if len(pre_vals) > 1 else 0.0
+    sd_post_global = post_vals.std(ddof=1) if len(post_vals) > 1 else 0.0
+
+    # 모든 이벤트에 동일한 SE 적용
+    n = len(df_subset)
+    se_pre = np.full(n, sd_pre_global)
+    se_post = np.full(n, sd_post_global)
     se_delta = np.sqrt(se_pre**2 + se_post**2)
 
     # ΔCAR
-    delta = post_mat.sum(axis=1) - pre_mat.sum(axis=1)
+    delta = df_subset[post_col].fillna(0) - df_subset[pre_col].fillna(0)
+    delta = delta.to_numpy(dtype=float)
+
     return se_delta, delta
 
 
@@ -84,13 +110,19 @@ def calc_pseudo_r2(model):
     return pseudo_r2, adj_r2
 
 
-def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=0.8):
+def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=None, alpha=0.05):
     """
     ΔCAR 기준: ΔCAR_{i,t} = CAR_{post,i,t} - CAR_{pre,i,t}
     hit:
       - label=+1 or -1: hit=1 if sign(ΔCAR) == label_sign
-      - label=0(중립): hit=1 if |ΔCAR| <= neutral_epsilon
-    logistic regression on period_dummy
+      - label=0(중립): hit=1 if |ΔCAR| <= eps_i (이벤트별 epsilon 자동 계산)
+
+    Parameters:
+    -----------
+    neutral_epsilon : float, optional
+        중립 이벤트 epsilon 값. None이면 자동 계산 (기본값: None)
+    alpha : float
+        유의수준 (기본값: 0.05)
     """
     delta = df_subset[f"abn_ret_{t}m"] - df_subset[f"abn_ret_minus_{t}m"]
     label_sign = df_subset["label_sign"]
@@ -100,9 +132,24 @@ def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=0.8):
     hit[mask_posneg] = (np.sign(delta[mask_posneg]) == label_sign[mask_posneg]).astype(
         int
     )
-    # Neutral
+    # Neutral: epsilon 자동 계산
     mask_neutral = label_sign == 0
-    hit[mask_neutral] = (np.abs(delta[mask_neutral]) <= neutral_epsilon).astype(int)
+    if mask_neutral.sum() > 0:
+        if neutral_epsilon is None:
+            # 이벤트별 SE 계산하여 epsilon 자동 계산
+            z = norm.ppf(1 - alpha / 2.0)
+            # 전체 데이터프레임에 대해 SE 계산 (인덱스 보존)
+            se_delta_all, _ = _eventwise_se_delta(df_subset, event_window=t)
+            # 중립 이벤트만 필터링
+            eps_i_neutral = z * se_delta_all[mask_neutral]
+            # delta 값을 가져와서 비교
+            delta_neutral = delta[mask_neutral].to_numpy()
+            hit[mask_neutral] = (np.abs(delta_neutral) <= eps_i_neutral).astype(int)
+        else:
+            # 기존 방식: 고정 epsilon 사용
+            hit[mask_neutral] = (np.abs(delta[mask_neutral]) <= neutral_epsilon).astype(
+                int
+            )
 
     X = sm.add_constant(df_subset["period_dummy"])
     model = sm.Logit(hit, X).fit(disp=0)
@@ -137,13 +184,19 @@ def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=0.8):
     }
 
 
-def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=0.4):
+def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=None, alpha=0.05):
     """
     post CAR 기준: 0→+h 누적초과수익의 부호 부합 여부
     hit:
       - label=+1 or -1: hit=1 if sign(abn_ret_{h}m) == label_sign
-      - label=0(중립): hit=1 if |abn_ret_{h}m| <= neutral_epsilon
-    logistic regression on period_dummy
+      - label=0(중립): hit=1 if |abn_ret_{h}m| <= eps_i (전체 표본 기준 epsilon 자동 계산)
+
+    Parameters:
+    -----------
+    neutral_epsilon : float, optional
+        중립 이벤트 epsilon 값. None이면 자동 계산 (기본값: None)
+    alpha : float
+        유의수준 (기본값: 0.05)
     """
     abn = df_subset[f"abn_ret_{h}m"]
     label_sign = df_subset["label_sign"]
@@ -153,9 +206,33 @@ def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=0.4):
     hit[mask_posneg] = (np.sign(abn[mask_posneg]) == label_sign[mask_posneg]).astype(
         int
     )
-    # Neutral
+    # Neutral: epsilon 자동 계산
     mask_neutral = label_sign == 0
-    hit[mask_neutral] = (np.abs(abn[mask_neutral]) <= neutral_epsilon).astype(int)
+    if mask_neutral.sum() > 0:
+        if neutral_epsilon is None:
+            # post CAR는 단일 값이므로, pre/post 표준편차로 SE 계산
+            z = norm.ppf(1 - alpha / 2.0)
+            pre_col = f"abn_ret_minus_{h}m"
+            post_col = f"abn_ret_{h}m"
+
+            # 전체 표본의 표준편차 계산 (delta SE 근사)
+            pre_vals = df_subset[pre_col].dropna()
+            post_vals = df_subset[post_col].dropna()
+            sd_pre = pre_vals.std(ddof=1) if len(pre_vals) > 1 else 0.0
+            sd_post = post_vals.std(ddof=1) if len(post_vals) > 1 else 0.0
+            se_delta_global = (
+                np.sqrt(sd_pre**2 + sd_post**2) if (sd_pre > 0 or sd_post > 0) else 0.0
+            )
+
+            # 모든 중립 이벤트에 동일한 epsilon 적용
+            eps_i = z * se_delta_global if se_delta_global > 0 else np.inf
+            abn_neutral = abn[mask_neutral].to_numpy()
+            hit[mask_neutral] = (np.abs(abn_neutral) <= eps_i).astype(int)
+        else:
+            # 기존 방식: 고정 epsilon 사용
+            hit[mask_neutral] = (np.abs(abn[mask_neutral]) <= neutral_epsilon).astype(
+                int
+            )
 
     X = sm.add_constant(df_subset["period_dummy"])
     model = sm.Logit(hit, X).fit(disp=0)
