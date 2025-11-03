@@ -18,18 +18,24 @@ from config import KOSDAQ_OUT_DIR, KOSPI_OUT_DIR, TZ
 # 테이블 및 컬럼 설정
 TABLE_NAME = "abnormal_return"
 ABN_RET_COLUMNS = {
-    -60: "abn_ret_minus_60m",
-    -50: "abn_ret_minus_50m",
-    -40: "abn_ret_minus_40m",
-    -30: "abn_ret_minus_30m",
-    -20: "abn_ret_minus_20m",
-    -10: "abn_ret_minus_10m",
-    10: "abn_ret_10m",
-    20: "abn_ret_20m",
-    30: "abn_ret_30m",
-    40: "abn_ret_40m",
-    50: "abn_ret_50m",
-    60: "abn_ret_60m",
+    -9: "abn_ret_minus_9m",
+    -8: "abn_ret_minus_8m",
+    -7: "abn_ret_minus_7m",
+    -6: "abn_ret_minus_6m",
+    -5: "abn_ret_minus_5m",
+    -4: "abn_ret_minus_4m",
+    -3: "abn_ret_minus_3m",
+    -2: "abn_ret_minus_2m",
+    -1: "abn_ret_minus_1m",
+    1: "abn_ret_1m",
+    2: "abn_ret_2m",
+    3: "abn_ret_3m",
+    4: "abn_ret_4m",
+    5: "abn_ret_5m",
+    6: "abn_ret_6m",
+    7: "abn_ret_7m",
+    8: "abn_ret_8m",
+    9: "abn_ret_9m",
 }
 
 # ─────────── DB 커넥션 ─────────────────────────────────────────────
@@ -213,6 +219,20 @@ def event_reaction_returns_dag():
         """
         with ENGINE.begin() as conn:
             conn.execute(sa.text(create_sql))
+
+    @task
+    def add_abn_ret_columns_if_not_exists() -> None:
+        """
+        ABN_RET_COLUMNS 필드들이 테이블에 없으면 추가합니다 (멱등성 보장).
+        """
+        with ENGINE.begin() as conn:
+            for col_name in ABN_RET_COLUMNS.values():
+                alter_sql = f"""
+                ALTER TABLE {TABLE_NAME}
+                ADD COLUMN IF NOT EXISTS {col_name} DOUBLE PRECISION;
+                """
+                conn.execute(sa.text(alter_sql))
+                print(f"Ensured column exists: {col_name}")
 
     # ────────────────────────────────────────────────────────────────
     def fetch_events_monthly(start_date: datetime, end_date: datetime) -> list[dict]:
@@ -469,13 +489,14 @@ def event_reaction_returns_dag():
 
     # ───────────────────────── DAG 의 Task 의존성 ───────────────────
     create_table_task = create_table_if_not_exists()
+    add_columns_task = add_abn_ret_columns_if_not_exists()
     events_task = fetch_events(
-        start_date=datetime(2022, 9, 1),
+        start_date=datetime(2023, 1, 1),
         end_date=datetime(2023, 12, 31),
     )
     returns_task = compute_returns_monthly.expand(events=events_task)
 
-    create_table_task >> returns_task
+    create_table_task >> add_columns_task >> returns_task
 
 
 dag = event_reaction_returns_dag()

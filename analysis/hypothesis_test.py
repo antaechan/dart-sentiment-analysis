@@ -4,16 +4,6 @@ import statsmodels.api as sm
 from scipy.stats import norm
 
 
-def _safe_std_1d(a):
-    """NaN 무시, 길이<=1이면 0 반환"""
-    a = np.asarray(a, dtype=float)
-    a = a[~np.isnan(a)]
-    n = a.size
-    if n <= 1:
-        return 0.0
-    return float(np.nanstd(a, ddof=1))
-
-
 def _eventwise_se_delta(df_subset, event_window):
     """
     이벤트별 ΔCAR의 SE (근사):
