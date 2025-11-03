@@ -152,6 +152,9 @@ epsilon 값 한번 찍어보기 (column 추가)
 neutral mean > 0.4, 0.5로 변경
 weighted > telegram period imbalance 해결
 
+Robustness Test 추가
+실제 텔레그램 데이터
+
 
 
 
