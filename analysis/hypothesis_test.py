@@ -4,6 +4,36 @@ import statsmodels.api as sm
 from scipy.stats import norm
 
 
+def _mad_trimmed_abs_mean(arr, k=2.0):
+    """
+    MAD 기반 트리밍 후 mean(|x|) 반환.
+    arr: 1D array-like
+    k  : 컷오프 배수 (기본 3.0)
+
+    절차:
+      - 유한값만 사용
+      - median, MAD 계산
+      - |x - median| <= k * (1.4826 * MAD) 안의 값만 남김
+      - 남은 표본의 mean(|x|) 리턴 (없으면 np.nan)
+    """
+    x = np.asarray(arr, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return np.nan, 0
+
+    med = np.median(x)
+    mad = np.median(np.abs(x - med))
+    if mad == 0:
+        trimmed = x  # 분산 거의 없으면 그대로
+    else:
+        s = 1.4826 * mad
+        trimmed = x[np.abs(x - med) <= k * s]
+        if trimmed.size == 0:
+            trimmed = x  # 전부 잘렸으면 폴백
+
+    return float(np.mean(np.abs(trimmed))), int(trimmed.size)
+
+
 def print_sample_summary_with_neutral(df, label_col="label_sign"):
     """
     중립 이벤트 포함 샘플 요약 통계 출력
@@ -52,43 +82,35 @@ def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=None, alpha=0.
     ΔCAR 기준: ΔCAR_{i,t} = CAR_{post,i,t} - CAR_{pre,i,t}
     hit:
       - label=+1/-1: sign(ΔCAR) == label_sign
-      - label=0(중립): |ΔCAR| <= ε,  ε = mean(|ΔCAR|) on neutral (finite only)
+      - label=0(중립): |ΔCAR| <= ε,  ε = MAD-트리밍 후 mean(|ΔCAR|) (neutral, finite only)
     """
-    # ΔCAR
     delta = df_subset[f"abn_ret_{t}m"] - df_subset[f"abn_ret_minus_{t}m"]
     label_sign = df_subset["label_sign"]
 
-    # 초기화
     hit = np.zeros(len(df_subset), dtype=int)
 
-    # +/- 라벨: 부호 일치
+    # +/- 라벨
     mask_posneg = label_sign != 0
     hit[mask_posneg] = (np.sign(delta[mask_posneg]) == label_sign[mask_posneg]).astype(
         int
     )
 
-    # 0(중립) 라벨: ε 계산 및 판정
+    # 0(중립) 라벨: ε 계산 및 판정 (MAD 트리밍)
     mask_neutral = label_sign == 0
     calculated_epsilon = None
     if mask_neutral.any():
         if neutral_epsilon is None:
-            # 유효한 ΔCAR만 사용해 ε 계산
             delta_neu_all = delta[mask_neutral].to_numpy(dtype=float)
-            finite_mask = np.isfinite(delta_neu_all)
-            delta_neu = delta_neu_all[finite_mask]
-
-            if delta_neu.size > 0:
-                eps = float(np.mean(np.abs(delta_neu)))
+            eps, _n_kept = _mad_trimmed_abs_mean(delta_neu_all, k=2.0)
+            if np.isfinite(eps):
                 calculated_epsilon = eps
-
-                # 유효한 중립 관측에만 hit 갱신
+                finite_mask = np.isfinite(delta_neu_all)
                 idx_neutral = np.flatnonzero(mask_neutral.to_numpy())
                 idx_valid = idx_neutral[finite_mask]
-                hit[idx_valid] = (np.abs(delta_neu) <= eps).astype(int)
+                hit[idx_valid] = (np.abs(delta_neu_all[finite_mask]) <= eps).astype(int)
             else:
                 calculated_epsilon = np.nan
         else:
-            # 제공된 ε 사용 (중립 ΔCAR 유효값에만 판정)
             eps = float(neutral_epsilon)
             calculated_epsilon = eps
             delta_neu_all = delta[mask_neutral].to_numpy(dtype=float)
@@ -107,7 +129,6 @@ def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=None, alpha=0.
     t_stat = float(model.tvalues["period_dummy"])
     odds_ratio = float(np.exp(beta))
 
-    # 전/후 평균 예측확률
     X0 = X.copy()
     X0["period_dummy"] = 0
     X1 = X.copy()
@@ -119,7 +140,7 @@ def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=None, alpha=0.
     beta_star = f"{beta:.4f}{get_sig_star(pval)}"
     pseudo_r2, adj_r2 = calc_pseudo_r2(model)
 
-    result = {
+    return {
         "window": t,
         "beta": beta,
         "beta_star": beta_star,
@@ -133,12 +154,10 @@ def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=None, alpha=0.
         "n_obs": int(model.nobs),
         "pseudo_r2": pseudo_r2,
         "adj_r2": adj_r2,
-        # 항상 포함
         "neutral_epsilon": (
             float(calculated_epsilon) if calculated_epsilon is not None else np.nan
         ),
     }
-    return result
 
 
 def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=None, alpha=0.05):
@@ -146,51 +165,47 @@ def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=None, alpha=
     post CAR 기준: 0→+h 누적초과수익의 부호 부합 여부
     hit:
       - label=+1/-1: sign(abn_ret_{h}m) == label_sign
-      - label=0(중립): |abn_ret_{h}m| <= ε,  ε = mean(|ΔCAR|) on neutral (finite only)
-        (ε 계산은 중립 ΔCAR의 유효값 기반, 판정은 postCAR의 유효값에 적용)
+      - label=0(중립): |abn_ret_{h}m| <= ε,
+        ε = MAD-트리밍 후 mean(|ΔCAR|) (neutral, finite only; 계산은 ΔCAR로, 판정은 postCAR로)
     """
     abn = df_subset[f"abn_ret_{h}m"]
     label_sign = df_subset["label_sign"]
 
-    # 초기화
     hit = np.zeros(len(df_subset), dtype=int)
 
-    # +/- 라벨: 부호 일치
+    # +/- 라벨
     mask_posneg = label_sign != 0
     hit[mask_posneg] = (np.sign(abn[mask_posneg]) == label_sign[mask_posneg]).astype(
         int
     )
 
-    # 0(중립) 라벨
+    # 0(중립): ε 계산(ΔCAR, MAD 트리밍) → 판정은 postCAR 유효값
     mask_neutral = label_sign == 0
     calculated_epsilon = None
     if mask_neutral.any():
-        # ε 계산은 ΔCAR 유효값으로
         delta_all = df_subset[f"abn_ret_{h}m"] - df_subset[f"abn_ret_minus_{h}m"]
         delta_neu_all = delta_all[mask_neutral].to_numpy(dtype=float)
-        finite_delta = np.isfinite(delta_neu_all)
-        delta_neu = delta_neu_all[finite_delta]
 
         if neutral_epsilon is None:
-            if delta_neu.size > 0:
-                eps = float(np.mean(np.abs(delta_neu)))
+            eps, _n_kept = _mad_trimmed_abs_mean(delta_neu_all, k=2.0)
+            if np.isfinite(eps):
                 calculated_epsilon = eps
+                abn_neu_all = abn[mask_neutral].to_numpy(dtype=float)
+                finite_abn = np.isfinite(abn_neu_all)
+                idx_neutral = np.flatnonzero(mask_neutral.to_numpy())
+                idx_valid_abn = idx_neutral[finite_abn]
+                abn_neutral_valid = abn_neu_all[finite_abn]
+                hit[idx_valid_abn] = (np.abs(abn_neutral_valid) <= eps).astype(int)
             else:
                 calculated_epsilon = np.nan
-                eps = None
         else:
             eps = float(neutral_epsilon)
             calculated_epsilon = eps
-
-        # 판정은 postCAR의 유효값에 대해서만 수행
-        if eps is not None and np.isfinite(eps):
             abn_neu_all = abn[mask_neutral].to_numpy(dtype=float)
             finite_abn = np.isfinite(abn_neu_all)
-
             idx_neutral = np.flatnonzero(mask_neutral.to_numpy())
             idx_valid_abn = idx_neutral[finite_abn]
             abn_neutral_valid = abn_neu_all[finite_abn]
-
             hit[idx_valid_abn] = (np.abs(abn_neutral_valid) <= eps).astype(int)
 
     # 로지스틱 회귀
@@ -203,7 +218,6 @@ def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=None, alpha=
     t_stat = float(model.tvalues["period_dummy"])
     odds_ratio = float(np.exp(beta))
 
-    # 전/후 평균 예측확률
     X0 = X.copy()
     X0["period_dummy"] = 0
     X1 = X.copy()
@@ -215,7 +229,7 @@ def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=None, alpha=
     beta_star = f"{beta:.4f}{get_sig_star(pval)}"
     pseudo_r2, adj_r2 = calc_pseudo_r2(model)
 
-    result = {
+    return {
         "window": h,
         "beta": beta,
         "beta_star": beta_star,
@@ -229,12 +243,10 @@ def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=None, alpha=
         "n_obs": int(model.nobs),
         "pseudo_r2": pseudo_r2,
         "adj_r2": adj_r2,
-        # 항상 포함
         "neutral_epsilon": (
             float(calculated_epsilon) if calculated_epsilon is not None else np.nan
         ),
     }
-    return result
 
 
 def run_logistic_table(
