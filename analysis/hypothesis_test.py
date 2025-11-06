@@ -121,7 +121,12 @@ def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=None, alpha=0.
 
     # 로지스틱 회귀
     X = sm.add_constant(df_subset["period_dummy"])
-    model = sm.Logit(hit, X).fit(disp=0)
+    y = pd.Series(hit, index=df_subset.index).astype(float)
+
+    # 회귀 가능 표본만 남김 (y, X 모두 유효)
+    valid = y.notna() & X.notna().all(axis=1)
+    Xv, yv = X.loc[valid], y.loc[valid]
+    model = sm.Logit(yv, Xv).fit(disp=0)
 
     beta = float(model.params["period_dummy"])
     pval = float(model.pvalues["period_dummy"])
@@ -129,9 +134,9 @@ def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=None, alpha=0.
     t_stat = float(model.tvalues["period_dummy"])
     odds_ratio = float(np.exp(beta))
 
-    X0 = X.copy()
+    X0 = Xv.copy()
     X0["period_dummy"] = 0
-    X1 = X.copy()
+    X1 = Xv.copy()
     X1["period_dummy"] = 1
     p0 = float(model.predict(X0).mean())
     p1 = float(model.predict(X1).mean())
@@ -210,7 +215,12 @@ def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=None, alpha=
 
     # 로지스틱 회귀
     X = sm.add_constant(df_subset["period_dummy"])
-    model = sm.Logit(hit, X).fit(disp=0)
+    y = pd.Series(hit, index=df_subset.index).astype(float)
+
+    # 회귀 가능 표본만 남김 (y, X 모두 유효)
+    valid = y.notna() & X.notna().all(axis=1)
+    Xv, yv = X.loc[valid], y.loc[valid]
+    model = sm.Logit(yv, Xv).fit(disp=0)
 
     beta = float(model.params["period_dummy"])
     pval = float(model.pvalues["period_dummy"])
@@ -218,9 +228,9 @@ def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=None, alpha=
     t_stat = float(model.tvalues["period_dummy"])
     odds_ratio = float(np.exp(beta))
 
-    X0 = X.copy()
+    X0 = Xv.copy()
     X0["period_dummy"] = 0
-    X1 = X.copy()
+    X1 = Xv.copy()
     X1["period_dummy"] = 1
     p0 = float(model.predict(X0).mean())
     p1 = float(model.predict(X1).mean())
@@ -365,15 +375,22 @@ def logistic_hit_delta(df_subset, t):
     realized_sign = np.sign(delta)
     hit = (realized_sign == df_subset["label_sign"]).astype(int)
     X = sm.add_constant(df_subset["period_dummy"])
-    model = sm.Logit(hit, X).fit(disp=0)
+    y = pd.to_numeric(hit, errors="coerce")
+
+    # 회귀 가능 표본만 남김 (y, X 모두 유효)
+    valid = y.notna() & X.notna().all(axis=1)
+    Xv, yv = X.loc[valid], y.loc[valid]
+    model = sm.Logit(yv, Xv).fit(disp=0)
+
     beta = float(model.params["period_dummy"])
     pval = float(model.pvalues["period_dummy"])
     std = float(model.bse["period_dummy"])
     t_stat = float(model.tvalues["period_dummy"])
     odds_ratio = float(np.exp(beta))
-    X0 = X.copy()
+
+    X0 = Xv.copy()
     X0["period_dummy"] = 0
-    X1 = X.copy()
+    X1 = Xv.copy()
     X1["period_dummy"] = 1
     p0 = float(model.predict(X0).mean())
     p1 = float(model.predict(X1).mean())
@@ -405,15 +422,22 @@ def logistic_hit_postCAR(df_subset, h):
     realized_sign = np.sign(df_subset[f"abn_ret_{h}m"])
     hit = (realized_sign == df_subset["label_sign"]).astype(int)
     X = sm.add_constant(df_subset["period_dummy"])
-    model = sm.Logit(hit, X).fit(disp=0)
+    y = pd.to_numeric(hit, errors="coerce")
+
+    # 회귀 가능 표본만 남김 (y, X 모두 유효)
+    valid = y.notna() & X.notna().all(axis=1)
+    Xv, yv = X.loc[valid], y.loc[valid]
+    model = sm.Logit(yv, Xv).fit(disp=0)
+
     beta = float(model.params["period_dummy"])
     pval = float(model.pvalues["period_dummy"])
     std = float(model.bse["period_dummy"])
     t_stat = float(model.tvalues["period_dummy"])
     odds_ratio = float(np.exp(beta))
-    X0 = X.copy()
+
+    X0 = Xv.copy()
     X0["period_dummy"] = 0
-    X1 = X.copy()
+    X1 = Xv.copy()
     X1["period_dummy"] = 1
     p0 = float(model.predict(X0).mean())
     p1 = float(model.predict(X1).mean())
