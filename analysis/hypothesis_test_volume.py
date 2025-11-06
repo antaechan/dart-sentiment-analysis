@@ -155,10 +155,9 @@ def logistic_hit_delta_with_neutral_and_vol(
     valid = y.notna() & X.notna().all(axis=1)
     Xv, yv = X.loc[valid], y.loc[valid]
 
-    model = sm.Logit(yv, Xv).fit(disp=0)
+    cov_type = "HC1" if robust_se else "nonrobust"
+    model = sm.Logit(yv, Xv).fit(disp=0, cov_type=cov_type)
     res = model
-    if robust_se:
-        res = model.get_robustcov_results(cov_type="HC1")
 
     # period 효과(핵심), 공변량 효과(참고)
     b_period = float(res.params["period_dummy"])
@@ -212,7 +211,7 @@ def logistic_hit_delta_with_neutral_and_vol(
         "neutral_epsilon": np.nan,  # 기본값
         # 공변량 보고
         "beta_vol": b_vol,
-        "se_vol": se_vol,
+        "std_vol": se_vol,
         "p_vol": p_vol,
         "beta_interaction": b_int,
         "se_interaction": se_int,
@@ -278,10 +277,9 @@ def logistic_hit_postCAR_with_neutral_and_vol(
     valid = y.notna() & X.notna().all(axis=1)
     Xv, yv = X.loc[valid], y.loc[valid]
 
-    model = sm.Logit(yv, Xv).fit(disp=0)
+    cov_type = "HC1" if robust_se else "nonrobust"
+    model = sm.Logit(yv, Xv).fit(disp=0, cov_type=cov_type)
     res = model
-    if robust_se:
-        res = model.get_robustcov_results(cov_type="HC1")
 
     b_period = float(res.params["period_dummy"])
     se_period = float(res.bse["period_dummy"])
@@ -330,7 +328,7 @@ def logistic_hit_postCAR_with_neutral_and_vol(
         "adj_r2": adj_r2,
         "neutral_epsilon": np.nan,
         "beta_vol": b_vol,
-        "se_vol": se_vol,
+        "std_vol": se_vol,
         "p_vol": p_vol,
         "beta_interaction": b_int,
         "se_interaction": se_int,
@@ -416,6 +414,13 @@ def run_logistic_table(
         columns.append("neutral_epsilon")
         round_dict["neutral_epsilon"] = 6
 
+    # 거래량 공변량 컬럼이 있으면 추가
+    if "beta_vol" in results_df.columns:
+        columns.extend(["beta_vol", "std_vol", "p_vol"])
+        round_dict["beta_vol"] = 4
+        round_dict["std_vol"] = 4
+        round_dict["p_vol"] = 12
+
     print(f"\n--- {label} 기준 결과 ---")
     print(
         results_df[columns]
@@ -447,82 +452,171 @@ def print_sample_summary(df, label_col="label_sign"):
     return df_nn
 
 
-def logistic_hit_delta(df_subset, t):
+# ========== (중립 제거) ΔCAR + 거래량 공변량 ==========
+def logistic_hit_delta_with_vol(
+    df_subset,
+    t,
+    covar_prefix="delta_cum_volume_",
+    add_interaction=False,
+    robust_se=True,
+):
     """
-    ΔCAR 기준: ΔCAR_{i,t} = CAR_{post,i,t} - CAR_{pre,i,t}
-    hit_{i,t} = 1 if sign(ΔCAR_{i,t}) == label_sign_i else 0
-    logistic regression on period_dummy
-
-    Note: 중립 이벤트는 이미 제거된 상태여야 함
+    ΔCAR 기준 (중립 제거): period_dummy + delta_cum_volume_{t}m 공변량 포함
     """
     delta = df_subset[f"abn_ret_{t}m"] - df_subset[f"abn_ret_minus_{t}m"]
     realized_sign = np.sign(delta)
     hit = (realized_sign == df_subset["label_sign"]).astype(int)
-    X = sm.add_constant(df_subset["period_dummy"])
-    model = sm.Logit(hit, X).fit(disp=0)
-    beta = float(model.params["period_dummy"])
-    pval = float(model.pvalues["period_dummy"])
-    std = float(model.bse["period_dummy"])
-    t_stat = float(model.tvalues["period_dummy"])
-    odds_ratio = float(np.exp(beta))
-    X0 = X.copy()
+
+    X = _build_X_with_vol(
+        df_subset, t, covar_prefix=covar_prefix, add_interaction=add_interaction
+    )
+    y = pd.to_numeric(hit, errors="coerce")
+
+    valid = y.notna() & X.notna().all(axis=1)
+    Xv, yv = X.loc[valid], y.loc[valid]
+
+    cov_type = "HC1" if robust_se else "nonrobust"
+    model = sm.Logit(yv, Xv).fit(disp=0, cov_type=cov_type)
+    res = model
+
+    # period 효과
+    b_p = float(res.params["period_dummy"])
+    se_p = float(res.bse["period_dummy"])
+    t_p = float(res.tvalues["period_dummy"])
+    p_p = float(res.pvalues["period_dummy"])
+    or_p = float(np.exp(b_p))
+
+    # 공변량 효과
+    b_v = float(res.params["vol"])
+    se_v = float(res.bse["vol"])
+    p_v = float(res.pvalues["vol"])
+
+    # 상호작용(선택)
+    if add_interaction and "period_x_vol" in res.params.index:
+        b_i = float(res.params["period_x_vol"])
+        se_i = float(res.bse["period_x_vol"])
+        p_i = float(res.pvalues["period_x_vol"])
+    else:
+        b_i = se_i = p_i = np.nan
+
+    # 평균예측 확률 (period 0↔1, vol 분포는 그대로)
+    X0 = Xv.copy()
     X0["period_dummy"] = 0
-    X1 = X.copy()
+    X1 = Xv.copy()
     X1["period_dummy"] = 1
+    if add_interaction and "period_x_vol" in Xv.columns:
+        X0["period_x_vol"] = X0["period_dummy"] * X0["vol"]
+        X1["period_x_vol"] = X1["period_dummy"] * X1["vol"]
     p0 = float(model.predict(X0).mean())
     p1 = float(model.predict(X1).mean())
     diff_pp = (p1 - p0) * 100.0
-    beta_star = f"{beta:.4f}{get_sig_star(pval)}"
+
+    beta_star = f"{b_p:.4f}{get_sig_star(p_p)}"
+    beta_vol_star = f"{b_v:.4f}{get_sig_star(p_v)}"
+    pseudo_r2, adj_r2 = calc_pseudo_r2(model)
+
     return {
         "window": t,
-        "beta": beta,
+        "beta": b_p,
         "beta_star": beta_star,
-        "std": std,
-        "t_stat": t_stat,
-        "p_value": pval,
-        "odds_ratio": odds_ratio,
+        "std": se_p,
+        "t_stat": t_p,
+        "p_value": p_p,
+        "odds_ratio": or_p,
         "p_before": p0,
         "p_after": p1,
         "diff_pp": diff_pp,
         "n_obs": int(model.nobs),
+        "pseudo_r2": pseudo_r2,
+        "adj_r2": adj_r2,
+        # 공변량 보고
+        "beta_vol": b_v,
+        "beta_vol_star": beta_vol_star,
+        "std_vol": se_v,
+        "p_vol": p_v,
+        "beta_interaction": b_i,
+        "se_interaction": se_i,
+        "p_interaction": p_i,
     }
 
 
-def logistic_hit_postCAR(df_subset, h):
+# ========== (중립 제거) postCAR + 거래량 공변량 ==========
+def logistic_hit_postCAR_with_vol(
+    df_subset,
+    h,
+    covar_prefix="delta_cum_volume_",
+    add_interaction=False,
+    robust_se=True,
+):
     """
-    post CAR 기준: 0→+h 누적초과수익의 부호 부합 여부
-    hit = 1 if sign(abn_ret_{h}m) == label_sign_i else 0
-    logistic regression on period_dummy
-
-    Note: 중립 이벤트는 이미 제거된 상태여야 함
+    postCAR 기준 (중립 제거): period_dummy + delta_cum_volume_{h}m 공변량 포함
     """
     realized_sign = np.sign(df_subset[f"abn_ret_{h}m"])
     hit = (realized_sign == df_subset["label_sign"]).astype(int)
-    X = sm.add_constant(df_subset["period_dummy"])
-    model = sm.Logit(hit, X).fit(disp=0)
-    beta = float(model.params["period_dummy"])
-    pval = float(model.pvalues["period_dummy"])
-    std = float(model.bse["period_dummy"])
-    t_stat = float(model.tvalues["period_dummy"])
-    odds_ratio = float(np.exp(beta))
-    X0 = X.copy()
+
+    X = _build_X_with_vol(
+        df_subset, h, covar_prefix=covar_prefix, add_interaction=add_interaction
+    )
+    y = pd.to_numeric(hit, errors="coerce")
+
+    valid = y.notna() & X.notna().all(axis=1)
+    Xv, yv = X.loc[valid], y.loc[valid]
+
+    cov_type = "HC1" if robust_se else "nonrobust"
+    model = sm.Logit(yv, Xv).fit(disp=0, cov_type=cov_type)
+    res = model
+
+    b_p = float(res.params["period_dummy"])
+    se_p = float(res.bse["period_dummy"])
+    t_p = float(res.tvalues["period_dummy"])
+    p_p = float(res.pvalues["period_dummy"])
+    or_p = float(np.exp(b_p))
+
+    b_v = float(res.params["vol"])
+    se_v = float(res.bse["vol"])
+    p_v = float(res.pvalues["vol"])
+
+    if add_interaction and "period_x_vol" in res.params.index:
+        b_i = float(res.params["period_x_vol"])
+        se_i = float(res.bse["period_x_vol"])
+        p_i = float(res.pvalues["period_x_vol"])
+    else:
+        b_i = se_i = p_i = np.nan
+
+    X0 = Xv.copy()
     X0["period_dummy"] = 0
-    X1 = X.copy()
+    X1 = Xv.copy()
     X1["period_dummy"] = 1
+    if add_interaction and "period_x_vol" in Xv.columns:
+        X0["period_x_vol"] = X0["period_dummy"] * X0["vol"]
+        X1["period_x_vol"] = X1["period_dummy"] * X1["vol"]
     p0 = float(model.predict(X0).mean())
     p1 = float(model.predict(X1).mean())
     diff_pp = (p1 - p0) * 100.0
-    beta_star = f"{beta:.4f}{get_sig_star(pval)}"
+
+    beta_star = f"{b_p:.4f}{get_sig_star(p_p)}"
+    beta_vol_star = f"{b_v:.4f}{get_sig_star(p_v)}"
+    pseudo_r2, adj_r2 = calc_pseudo_r2(model)
+
     return {
         "window": h,
-        "beta": beta,
+        "beta": b_p,
         "beta_star": beta_star,
-        "std": std,
-        "t_stat": t_stat,
-        "p_value": pval,
-        "odds_ratio": odds_ratio,
+        "std": se_p,
+        "t_stat": t_p,
+        "p_value": p_p,
+        "odds_ratio": or_p,
         "p_before": p0,
         "p_after": p1,
         "diff_pp": diff_pp,
         "n_obs": int(model.nobs),
+        "pseudo_r2": pseudo_r2,
+        "adj_r2": adj_r2,
+        "beta_vol": b_v,
+        "beta_vol_star": beta_vol_star,
+        "std_vol": se_v,
+        "p_vol": p_v,
+        "beta_interaction": b_i,
+        "se_interaction": se_i,
+        "p_interaction": p_i,
     }
