@@ -18,24 +18,8 @@ from config import KOSDAQ_OUT_DIR, KOSPI_OUT_DIR, TZ
 # 테이블 및 컬럼 설정
 TABLE_NAME = "abnormal_return_kind"
 VOLUME_COLUMNS = {
-    -9: "volume_minus_9m",
-    -8: "volume_minus_8m",
-    -7: "volume_minus_7m",
-    -6: "volume_minus_6m",
-    -5: "volume_minus_5m",
-    -4: "volume_minus_4m",
-    -3: "volume_minus_3m",
-    -2: "volume_minus_2m",
-    -1: "volume_minus_1m",
-    1: "volume_1m",
-    2: "volume_2m",
-    3: "volume_3m",
-    4: "volume_4m",
-    5: "volume_5m",
-    6: "volume_6m",
-    7: "volume_7m",
-    8: "volume_8m",
-    9: "volume_9m",
+    -10: "volume_minus_10m",
+    10: "volume_10m",
 }
 
 # ─────────── DB 커넥션 ─────────────────────────────────────────────
