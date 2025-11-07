@@ -170,6 +170,7 @@ def logistic_hit_delta_with_neutral_and_vol(
     b_vol = float(res.params["vol"])
     se_vol = float(res.bse["vol"])
     p_vol = float(res.pvalues["vol"])
+    gamma_vol_star = f"{b_vol:.4f}{get_sig_star(p_vol)}"
 
     # 상호작용 포함 시
     if add_interaction and "period_x_vol" in res.params.index:
@@ -210,7 +211,8 @@ def logistic_hit_delta_with_neutral_and_vol(
         "adj_r2": adj_r2,
         "neutral_epsilon": np.nan,  # 기본값
         # 공변량 보고
-        "beta_vol": b_vol,
+        "gamma_vol": b_vol,
+        "gamma_vol_star": gamma_vol_star,
         "std_vol": se_vol,
         "p_vol": p_vol,
         "beta_interaction": b_int,
@@ -290,6 +292,7 @@ def logistic_hit_postCAR_with_neutral_and_vol(
     b_vol = float(res.params["vol"])
     se_vol = float(res.bse["vol"])
     p_vol = float(res.pvalues["vol"])
+    gamma_vol_star = f"{b_vol:.4f}{get_sig_star(p_vol)}"
 
     if add_interaction and "period_x_vol" in res.params.index:
         b_int = float(res.params["period_x_vol"])
@@ -327,7 +330,8 @@ def logistic_hit_postCAR_with_neutral_and_vol(
         "pseudo_r2": pseudo_r2,
         "adj_r2": adj_r2,
         "neutral_epsilon": np.nan,
-        "beta_vol": b_vol,
+        "gamma_vol": b_vol,
+        "gamma_vol_star": gamma_vol_star,
         "std_vol": se_vol,
         "p_vol": p_vol,
         "beta_interaction": b_int,
@@ -415,11 +419,11 @@ def run_logistic_table(
         round_dict["neutral_epsilon"] = 6
 
     # 거래량 공변량 컬럼이 있으면 추가
-    if "beta_vol" in results_df.columns:
-        columns.extend(["beta_vol", "std_vol", "p_vol"])
-        round_dict["beta_vol"] = 4
+    if "gamma_vol_star" in results_df.columns:
+        columns.extend(["gamma_vol_star", "std_vol", "p_vol"])
         round_dict["std_vol"] = 4
         round_dict["p_vol"] = 12
+        rename_dict["gamma_vol_star"] = "gamma_vol"
 
     print(f"\n--- {label} 기준 결과 ---")
     print(
@@ -490,6 +494,7 @@ def logistic_hit_delta_with_vol(
     b_v = float(res.params["vol"])
     se_v = float(res.bse["vol"])
     p_v = float(res.pvalues["vol"])
+    gamma_vol_star = f"{b_v:.4f}{get_sig_star(p_v)}"
 
     # 상호작용(선택)
     if add_interaction and "period_x_vol" in res.params.index:
@@ -512,7 +517,6 @@ def logistic_hit_delta_with_vol(
     diff_pp = (p1 - p0) * 100.0
 
     beta_star = f"{b_p:.4f}{get_sig_star(p_p)}"
-    beta_vol_star = f"{b_v:.4f}{get_sig_star(p_v)}"
     pseudo_r2, adj_r2 = calc_pseudo_r2(model)
 
     return {
@@ -530,8 +534,8 @@ def logistic_hit_delta_with_vol(
         "pseudo_r2": pseudo_r2,
         "adj_r2": adj_r2,
         # 공변량 보고
-        "beta_vol": b_v,
-        "beta_vol_star": beta_vol_star,
+        "gamma_vol": b_v,
+        "gamma_vol_star": gamma_vol_star,
         "std_vol": se_v,
         "p_vol": p_v,
         "beta_interaction": b_i,
@@ -575,6 +579,7 @@ def logistic_hit_postCAR_with_vol(
     b_v = float(res.params["vol"])
     se_v = float(res.bse["vol"])
     p_v = float(res.pvalues["vol"])
+    gamma_vol_star = f"{b_v:.4f}{get_sig_star(p_v)}"
 
     if add_interaction and "period_x_vol" in res.params.index:
         b_i = float(res.params["period_x_vol"])
@@ -595,7 +600,6 @@ def logistic_hit_postCAR_with_vol(
     diff_pp = (p1 - p0) * 100.0
 
     beta_star = f"{b_p:.4f}{get_sig_star(p_p)}"
-    beta_vol_star = f"{b_v:.4f}{get_sig_star(p_v)}"
     pseudo_r2, adj_r2 = calc_pseudo_r2(model)
 
     return {
@@ -612,8 +616,8 @@ def logistic_hit_postCAR_with_vol(
         "n_obs": int(model.nobs),
         "pseudo_r2": pseudo_r2,
         "adj_r2": adj_r2,
-        "beta_vol": b_v,
-        "beta_vol_star": beta_vol_star,
+        "gamma_vol": b_v,
+        "gamma_vol_star": gamma_vol_star,
         "std_vol": se_v,
         "p_vol": p_v,
         "beta_interaction": b_i,
