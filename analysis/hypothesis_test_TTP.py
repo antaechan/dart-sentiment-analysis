@@ -24,18 +24,18 @@ def regress_ln_ttp_with_volume(
     robust_se=True,
 ):
     """
-    ln(time_to_peak) = α + β·telegram_dummy + γ·delta_cum_volume_10m + ε 회귀 실행 및 출력.
+    ln(time_to_peak) = α + β·telegram_dummy + γ·{volume_col} + ε 회귀 실행 및 출력.
 
     Parameters
     ----------
     df : DataFrame
-        분석 대상 데이터 (time_to_peak, telegram_dummy, delta_cum_volume_10m 포함)
+        분석 대상 데이터 (time_to_peak, telegram_dummy, {volume_col} 포함)
     time_col : str
         시간-to-peak 컬럼명 (기본: 'time_to_peak')
     dummy_col : str
         텔레그램 더미 컬럼명 (기본: 'telegram_dummy')
     volume_col : str
-        거래량 변화 컬럼명 (기본: 'delta_cum_volume_10m')
+        거래량 변화 컬럼명 ({volume_col})
     robust_se : bool
         HC1 견고표준오차 사용 여부 (기본 True)
     """
@@ -55,7 +55,7 @@ def regress_ln_ttp_with_volume(
         raise ValueError("No valid observations for ln(time_to_peak) regression.")
 
     data = data.copy()
-    data["ln_ttp"] = np.log(data[time_col])
+    data["ln_ttp"] = np.log(data[time_col] + 1)
 
     X = sm.add_constant(data[[dummy_col, volume_col]], has_constant="add")
     model = sm.OLS(data["ln_ttp"], X)
@@ -85,7 +85,7 @@ def regress_ln_ttp_with_volume(
     table = pd.DataFrame(rows)
     round_map = {"std": 4, "t_stat": 3, "p_value": 12}
 
-    print("\n--- ln(time_to_peak) 회귀 (10m) ---")
+    print(f"\n--- ln(time_to_peak) 회귀 ({volume_col}) ---")
     print(
         table[["variable", "coef_star", "std", "t_stat", "p_value"]]
         .rename(columns={"coef_star": "coef"})
@@ -291,18 +291,18 @@ def regress_ttp_with_volume(
     robust_se=True,
 ):
     """
-    TTP = α + β·telegram_dummy + γ·delta_cum_volume_10m + ε 회귀 실행 및 출력.
+    TTP = α + β·telegram_dummy + γ·{volume_col} + ε 회귀 실행 및 출력.
 
     Parameters
     ----------
     df : DataFrame
-        분석 대상 데이터 (time_to_peak, telegram_dummy, delta_cum_volume_10m 포함)
+        분석 대상 데이터 (time_to_peak, telegram_dummy, {volume_col} 포함)
     time_col : str
         시간-to-peak 컬럼명 (기본: 'time_to_peak')
     dummy_col : str
         텔레그램 더미 컬럼명 (기본: 'telegram_dummy')
     volume_col : str
-        거래량 변화 컬럼명 (기본: 'delta_cum_volume_10m')
+        거래량 변화 컬럼명 ({volume_col})
     robust_se : bool
         HC1 견고표준오차 사용 여부 (기본 True)
     """
@@ -319,7 +319,7 @@ def regress_ttp_with_volume(
     )
     data = data[data[time_col] > 0]
     if data.empty:
-        raise ValueError("No valid observations for ln(time_to_peak) regression.")
+        raise ValueError(f"No valid observations for TTP regression ({volume_col}).")
 
     data = data.copy()
     data["ttp"] = data[time_col]
