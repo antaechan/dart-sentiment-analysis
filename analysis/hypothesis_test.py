@@ -165,6 +165,94 @@ def logistic_hit_delta_with_neutral(df_subset, t, neutral_epsilon=None, alpha=0.
     }
 
 
+def logistic_hit_delta_with_neutral_log(df_subset, t, neutral_epsilon=None, alpha=0.05):
+    """
+    ΔCAR 기준: ΔCAR_{i,t} = CAR_{post,i,t} - CAR_{pre,i,t}
+    hit:
+      - label=+1/-1: sign(ΔCAR) == label_sign
+      - label=0(중립): |ΔCAR| <= ε,  ε = MAD-트리밍 후 mean(|ΔCAR|) (neutral, finite only)
+    """
+    delta = df_subset[f"CAR_{t}m"]
+    label_sign = df_subset["label_sign"]
+
+    hit = np.zeros(len(df_subset), dtype=int)
+
+    # +/- 라벨
+    mask_posneg = label_sign != 0
+    hit[mask_posneg] = (np.sign(delta[mask_posneg]) == label_sign[mask_posneg]).astype(
+        int
+    )
+
+    # 0(중립) 라벨: ε 계산 및 판정 (MAD 트리밍)
+    mask_neutral = label_sign == 0
+    calculated_epsilon = None
+    if mask_neutral.any():
+        if neutral_epsilon is None:
+            delta_neu_all = delta[mask_neutral].to_numpy(dtype=float)
+            eps, _n_kept = _mad_trimmed_abs_mean(delta_neu_all, k=2.0)
+            if np.isfinite(eps):
+                calculated_epsilon = eps
+                finite_mask = np.isfinite(delta_neu_all)
+                idx_neutral = np.flatnonzero(mask_neutral.to_numpy())
+                idx_valid = idx_neutral[finite_mask]
+                hit[idx_valid] = (np.abs(delta_neu_all[finite_mask]) <= eps).astype(int)
+            else:
+                calculated_epsilon = np.nan
+        else:
+            eps = float(neutral_epsilon)
+            calculated_epsilon = eps
+            delta_neu_all = delta[mask_neutral].to_numpy(dtype=float)
+            finite_mask = np.isfinite(delta_neu_all)
+            idx_neutral = np.flatnonzero(mask_neutral.to_numpy())
+            idx_valid = idx_neutral[finite_mask]
+            hit[idx_valid] = (np.abs(delta_neu_all[finite_mask]) <= eps).astype(int)
+
+    # 로지스틱 회귀
+    X = sm.add_constant(df_subset["period_dummy"])
+    y = pd.Series(hit, index=df_subset.index).astype(float)
+
+    # 회귀 가능 표본만 남김 (y, X 모두 유효)
+    valid = y.notna() & X.notna().all(axis=1)
+    Xv, yv = X.loc[valid], y.loc[valid]
+    model = sm.Logit(yv, Xv).fit(disp=0)
+
+    beta = float(model.params["period_dummy"])
+    pval = float(model.pvalues["period_dummy"])
+    std = float(model.bse["period_dummy"])
+    t_stat = float(model.tvalues["period_dummy"])
+    odds_ratio = float(np.exp(beta))
+
+    X0 = Xv.copy()
+    X0["period_dummy"] = 0
+    X1 = Xv.copy()
+    X1["period_dummy"] = 1
+    p0 = float(model.predict(X0).mean())
+    p1 = float(model.predict(X1).mean())
+    diff_pp = (p1 - p0) * 100.0
+
+    beta_star = f"{beta:.4f}{get_sig_star(pval)}"
+    pseudo_r2, adj_r2 = calc_pseudo_r2(model)
+
+    return {
+        "window": t,
+        "beta": beta,
+        "beta_star": beta_star,
+        "std": std,
+        "t_stat": t_stat,
+        "p_value": pval,
+        "odds_ratio": odds_ratio,
+        "p_before": p0,
+        "p_after": p1,
+        "diff_pp": diff_pp,
+        "n_obs": int(model.nobs),
+        "pseudo_r2": pseudo_r2,
+        "adj_r2": adj_r2,
+        "neutral_epsilon": (
+            float(calculated_epsilon) if calculated_epsilon is not None else np.nan
+        ),
+    }
+
+
 def logistic_hit_postCAR_with_neutral(df_subset, h, neutral_epsilon=None, alpha=0.05):
     """
     post CAR 기준: 0→+h 누적초과수익의 부호 부합 여부
@@ -372,6 +460,54 @@ def logistic_hit_delta(df_subset, t):
     Note: 중립 이벤트는 이미 제거된 상태여야 함
     """
     delta = df_subset[f"abn_ret_{t}m"] - df_subset[f"abn_ret_minus_{t}m"]
+    realized_sign = np.sign(delta)
+    hit = (realized_sign == df_subset["label_sign"]).astype(int)
+    X = sm.add_constant(df_subset["period_dummy"])
+    y = pd.to_numeric(hit, errors="coerce")
+
+    # 회귀 가능 표본만 남김 (y, X 모두 유효)
+    valid = y.notna() & X.notna().all(axis=1)
+    Xv, yv = X.loc[valid], y.loc[valid]
+    model = sm.Logit(yv, Xv).fit(disp=0)
+
+    beta = float(model.params["period_dummy"])
+    pval = float(model.pvalues["period_dummy"])
+    std = float(model.bse["period_dummy"])
+    t_stat = float(model.tvalues["period_dummy"])
+    odds_ratio = float(np.exp(beta))
+
+    X0 = Xv.copy()
+    X0["period_dummy"] = 0
+    X1 = Xv.copy()
+    X1["period_dummy"] = 1
+    p0 = float(model.predict(X0).mean())
+    p1 = float(model.predict(X1).mean())
+    diff_pp = (p1 - p0) * 100.0
+    beta_star = f"{beta:.4f}{get_sig_star(pval)}"
+    return {
+        "window": t,
+        "beta": beta,
+        "beta_star": beta_star,
+        "std": std,
+        "t_stat": t_stat,
+        "p_value": pval,
+        "odds_ratio": odds_ratio,
+        "p_before": p0,
+        "p_after": p1,
+        "diff_pp": diff_pp,
+        "n_obs": int(model.nobs),
+    }
+
+
+def logistic_hit_delta_log(df_subset, t):
+    """
+    ΔCAR 기준: ΔCAR_{i,t} = CAR_{post,i,t} - CAR_{pre,i,t}
+    hit_{i,t} = 1 if sign(ΔCAR_{i,t}) == label_sign_i else 0
+    logistic regression on period_dummy
+
+    Note: 중립 이벤트는 이미 제거된 상태여야 함
+    """
+    delta = df_subset[f"CAR_{t}m"]
     realized_sign = np.sign(delta)
     hit = (realized_sign == df_subset["label_sign"]).astype(int)
     X = sm.add_constant(df_subset["period_dummy"])
