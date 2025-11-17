@@ -226,6 +226,132 @@ def logistic_hit_delta_with_neutral_and_vol(
     return out
 
 
+# --- ΔCAR hit (중립 포함) + 거래량 공변량 ---
+def logistic_hit_delta_with_neutral_and_vol_log(
+    df_subset,
+    t,
+    neutral_epsilon=None,
+    alpha=0.05,
+    covar_prefix="delta_cum_volume_",
+    add_interaction=False,
+    robust_se=True,
+):
+    """
+    기존 logistic_hit_delta_with_neutral 에 'delta_cum_volume_{t}m' 공변량 추가
+    - add_interaction=True 면 period_dummy × volume 상호작용 포함
+    - robust_se=True 면 HC1 견고표준오차 사용
+    """
+    # ΔCAR
+    delta = df_subset[f"CAR_{t}m"]
+    label_sign = df_subset["label_sign"]
+
+    hit = np.zeros(len(df_subset), dtype=int)
+
+    # +/- 라벨
+    mask_posneg = label_sign != 0
+    hit[mask_posneg] = (np.sign(delta[mask_posneg]) == label_sign[mask_posneg]).astype(
+        int
+    )
+
+    # 0(중립) 라벨 처리 (MAD-트리밍 기반 ε)
+    mask_neutral = label_sign == 0
+    calculated_epsilon = None
+    if mask_neutral.any():
+        delta_neu_all = delta[mask_neutral].to_numpy(dtype=float)
+        if neutral_epsilon is None:
+            eps, _n_kept = _mad_trimmed_abs_mean(delta_neu_all, k=2.0)
+        else:
+            eps = float(neutral_epsilon)
+        if np.isfinite(eps):
+            calculated_epsilon = eps
+            finite_mask = np.isfinite(delta_neu_all)
+            idx_neutral = np.flatnonzero(mask_neutral.to_numpy())
+            idx_valid = idx_neutral[finite_mask]
+            hit[idx_valid] = (np.abs(delta_neu_all[finite_mask]) <= eps).astype(int)
+        else:
+            calculated_epsilon = np.nan
+
+    # 디자인 매트릭스 + 표본 정리
+    X = _build_X_with_vol(
+        df_subset, t, covar_prefix=covar_prefix, add_interaction=add_interaction
+    )
+    y = pd.Series(hit, index=df_subset.index).astype(float)
+
+    # 회귀 가능 표본만 남김 (y, X 모두 유효)
+    valid = y.notna() & X.notna().all(axis=1)
+    Xv, yv = X.loc[valid], y.loc[valid]
+
+    cov_type = "HC1" if robust_se else "nonrobust"
+    model = sm.Logit(yv, Xv).fit(disp=0, cov_type=cov_type)
+    res = model
+
+    # period 효과(핵심), 공변량 효과(참고)
+    b_period = float(res.params["period_dummy"])
+    se_period = float(res.bse["period_dummy"])
+    t_period = float(res.tvalues["period_dummy"])
+    p_period = float(res.pvalues["period_dummy"])
+    or_period = float(np.exp(b_period))
+
+    # 공변량 계수들(보고용)
+    b_vol = float(res.params["vol"])
+    se_vol = float(res.bse["vol"])
+    p_vol = float(res.pvalues["vol"])
+    gamma_vol_star = f"{b_vol:.4f}{get_sig_star(p_vol)}"
+
+    # 상호작용 포함 시
+    if add_interaction and "period_x_vol" in res.params.index:
+        b_int = float(res.params["period_x_vol"])
+        se_int = float(res.bse["period_x_vol"])
+        p_int = float(res.pvalues["period_x_vol"])
+    else:
+        b_int = se_int = p_int = np.nan
+
+    # 평균 예측 확률: period=0 vs 1
+    X0 = Xv.copy()
+    X0["period_dummy"] = 0
+    X1 = Xv.copy()
+    X1["period_dummy"] = 1
+    if add_interaction and "period_x_vol" in Xv.columns:
+        X0["period_x_vol"] = X0["period_dummy"] * X0["vol"]
+        X1["period_x_vol"] = X1["period_dummy"] * X1["vol"]
+    p0 = float(model.predict(X0).mean())
+    p1 = float(model.predict(X1).mean())
+    diff_pp = (p1 - p0) * 100.0
+
+    pseudo_r2, adj_r2 = calc_pseudo_r2(model)
+    beta_star = f"{b_period:.4f}{get_sig_star(p_period)}"
+
+    out = {
+        "window": t,
+        "beta": b_period,
+        "beta_star": beta_star,
+        "std": se_period,
+        "t_stat": t_period,
+        "p_value": p_period,
+        "odds_ratio": or_period,
+        "p_before": p0,
+        "p_after": p1,
+        "diff_pp": diff_pp,
+        "n_obs": int(model.nobs),
+        "pseudo_r2": pseudo_r2,
+        "adj_r2": adj_r2,
+        "neutral_epsilon": np.nan,  # 기본값
+        # 공변량 보고
+        "gamma_vol": b_vol,
+        "gamma_vol_star": gamma_vol_star,
+        "std_vol": se_vol,
+        "p_vol": p_vol,
+        "beta_interaction": b_int,
+        "se_interaction": se_int,
+        "p_interaction": p_int,
+    }
+    if mask_neutral.any():
+        out["neutral_epsilon"] = (
+            float(calculated_epsilon) if calculated_epsilon is not None else np.nan
+        )
+    return out
+
+
 # --- postCAR hit (중립 포함) + 거래량 공변량 ---
 def logistic_hit_postCAR_with_neutral_and_vol(
     df_subset,
@@ -468,6 +594,94 @@ def logistic_hit_delta_with_vol(
     ΔCAR 기준 (중립 제거): period_dummy + delta_cum_volume_{t}m 공변량 포함
     """
     delta = df_subset[f"abn_ret_{t}m"] - df_subset[f"abn_ret_minus_{t}m"]
+    realized_sign = np.sign(delta)
+    hit = (realized_sign == df_subset["label_sign"]).astype(int)
+
+    X = _build_X_with_vol(
+        df_subset, t, covar_prefix=covar_prefix, add_interaction=add_interaction
+    )
+    y = pd.to_numeric(hit, errors="coerce")
+
+    valid = y.notna() & X.notna().all(axis=1)
+    Xv, yv = X.loc[valid], y.loc[valid]
+
+    cov_type = "HC1" if robust_se else "nonrobust"
+    model = sm.Logit(yv, Xv).fit(disp=0, cov_type=cov_type)
+    res = model
+
+    # period 효과
+    b_p = float(res.params["period_dummy"])
+    se_p = float(res.bse["period_dummy"])
+    t_p = float(res.tvalues["period_dummy"])
+    p_p = float(res.pvalues["period_dummy"])
+    or_p = float(np.exp(b_p))
+
+    # 공변량 효과
+    b_v = float(res.params["vol"])
+    se_v = float(res.bse["vol"])
+    p_v = float(res.pvalues["vol"])
+    gamma_vol_star = f"{b_v:.4f}{get_sig_star(p_v)}"
+
+    # 상호작용(선택)
+    if add_interaction and "period_x_vol" in res.params.index:
+        b_i = float(res.params["period_x_vol"])
+        se_i = float(res.bse["period_x_vol"])
+        p_i = float(res.pvalues["period_x_vol"])
+    else:
+        b_i = se_i = p_i = np.nan
+
+    # 평균예측 확률 (period 0↔1, vol 분포는 그대로)
+    X0 = Xv.copy()
+    X0["period_dummy"] = 0
+    X1 = Xv.copy()
+    X1["period_dummy"] = 1
+    if add_interaction and "period_x_vol" in Xv.columns:
+        X0["period_x_vol"] = X0["period_dummy"] * X0["vol"]
+        X1["period_x_vol"] = X1["period_dummy"] * X1["vol"]
+    p0 = float(model.predict(X0).mean())
+    p1 = float(model.predict(X1).mean())
+    diff_pp = (p1 - p0) * 100.0
+
+    beta_star = f"{b_p:.4f}{get_sig_star(p_p)}"
+    pseudo_r2, adj_r2 = calc_pseudo_r2(model)
+
+    return {
+        "window": t,
+        "beta": b_p,
+        "beta_star": beta_star,
+        "std": se_p,
+        "t_stat": t_p,
+        "p_value": p_p,
+        "odds_ratio": or_p,
+        "p_before": p0,
+        "p_after": p1,
+        "diff_pp": diff_pp,
+        "n_obs": int(model.nobs),
+        "pseudo_r2": pseudo_r2,
+        "adj_r2": adj_r2,
+        # 공변량 보고
+        "gamma_vol": b_v,
+        "gamma_vol_star": gamma_vol_star,
+        "std_vol": se_v,
+        "p_vol": p_v,
+        "beta_interaction": b_i,
+        "se_interaction": se_i,
+        "p_interaction": p_i,
+    }
+
+
+# ========== (중립 제거) ΔCAR + 거래량 공변량 ==========
+def logistic_hit_delta_with_vol_log(
+    df_subset,
+    t,
+    covar_prefix="delta_cum_volume_",
+    add_interaction=False,
+    robust_se=True,
+):
+    """
+    ΔCAR 기준 (중립 제거): period_dummy + delta_cum_volume_{t}m 공변량 포함
+    """
+    delta = df_subset[f"CAR_{t}m"]
     realized_sign = np.sign(delta)
     hit = (realized_sign == df_subset["label_sign"]).astype(int)
 
